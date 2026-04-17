@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		A1000001000000000000A001 /* OpenMultitouchSupport in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002000000000000A001 /* OpenMultitouchSupport */; };
+		A1000001000000000000A002 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002000000000000A002 /* MLX */; };
+		A1000001000000000000A003 /* MLXNN in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002000000000000A003 /* MLXNN */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +30,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000001000000000000A001 /* OpenMultitouchSupport in Frameworks */,
+				A1000001000000000000A002 /* MLX in Frameworks */,
+				A1000001000000000000A003 /* MLXNN in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +75,8 @@
 			name = Scratchpad;
 			packageProductDependencies = (
 				A1000002000000000000A001 /* OpenMultitouchSupport */,
+				A1000002000000000000A002 /* MLX */,
+				A1000002000000000000A003 /* MLXNN */,
 			);
 			productName = Scratchpad;
 			productReference = 938285022F9211640076864E /* Scratchpad.app */;
@@ -102,6 +108,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A1000003000000000000A001 /* XCRemoteSwiftPackageReference "OpenMultitouchSupport" */,
+				A1000003000000000000A002 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 938285032F9211640076864E /* Products */;
@@ -352,6 +359,14 @@
 				minimumVersion = 1.0.12;
 			};
 		};
+		A1000003000000000000A002 /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.31.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -359,6 +374,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1000003000000000000A001 /* XCRemoteSwiftPackageReference "OpenMultitouchSupport" */;
 			productName = OpenMultitouchSupport;
+		};
+		A1000002000000000000A002 /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1000003000000000000A002 /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLX;
+		};
+		A1000002000000000000A003 /* MLXNN */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1000003000000000000A002 /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLXNN;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

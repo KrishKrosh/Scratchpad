@@ -49,6 +49,8 @@ struct ItemsLayer: View {
             switch item.kind {
             case .text(let content):
                 textView(content: content, item: item)
+            case .latex(let content):
+                latexView(content: content)
             case .shape(let kind, let color, let width):
                 shapeView(kind: kind, color: color.color, width: width * zoom)
             case .image(let data):
@@ -83,6 +85,24 @@ struct ItemsLayer: View {
                 .foregroundStyle(content.color.color)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(4)
+        }
+    }
+
+    @ViewBuilder
+    private func latexView(content: CanvasItem.LatexContent) -> some View {
+        if let data = content.renderedPNGData,
+           let nsImage = NSImage(data: data) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(6)
+        } else {
+            Text(content.latex.isEmpty ? " " : content.latex)
+                .font(.system(size: 18 * zoom, weight: .medium, design: .rounded))
+                .foregroundStyle(content.color.color)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(6)
         }
     }
 

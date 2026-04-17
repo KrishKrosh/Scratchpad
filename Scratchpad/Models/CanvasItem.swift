@@ -54,6 +54,7 @@ struct CanvasItem: Identifiable, Codable {
 
     enum Kind: Codable {
         case text(TextContent)
+        case latex(LatexContent)
         case shape(ShapeKind, CodableColor, CGFloat /* stroke width */)
         case image(Data /* PNG data */)
     }
@@ -62,5 +63,12 @@ struct CanvasItem: Identifiable, Codable {
         var text: String
         var fontSize: CGFloat
         var color: CodableColor
+    }
+
+    struct LatexContent: Codable {
+        var latex: String
+        var color: CodableColor
+        var renderedPNGData: Data?
+        var sourceStrokes: [Stroke]
     }
 }

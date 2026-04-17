@@ -13,6 +13,7 @@ struct HomeView: View {
 
     @State private var entries: [Persistence.DocEntry] = []
     @State private var refreshTick: Int = 0
+    @State private var selfTestStarted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,6 +42,9 @@ struct HomeView: View {
         .frame(minWidth: 760, minHeight: 540)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear { reload() }
+        .task {
+            await maybeRunSelfTest()
+        }
     }
 
     private var header: some View {
@@ -70,6 +74,72 @@ struct HomeView: View {
 
     private func reload() {
         entries = Persistence.list()
+    }
+
+    @MainActor
+    private func maybeRunSelfTest() async {
+        guard !selfTestStarted else { return }
+        guard
+            let raw = ProcessInfo.processInfo.environment["SCRATCHPAD_SELFTEST_FILE"],
+            !raw.isEmpty
+        else { return }
+
+        selfTestStarted = true
+        let fileURL = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
+
+        do {
+            let file = try Persistence.load(from: fileURL)
+            let strokeLimit = ProcessInfo.processInfo.environment["SCRATCHPAD_SELFTEST_MAX_STROKES"]
+                .flatMap(Int.init)
+            let strokes = strokeLimit.map { Array(file.strokes.prefix($0)) } ?? file.strokes
+            let debugImageURL = ProcessInfo.processInfo.environment["SCRATCHPAD_SELFTEST_DUMP_IMAGE"]
+                .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            let debugRawImageURL = ProcessInfo.processInfo.environment["SCRATCHPAD_SELFTEST_DUMP_RAW_IMAGE"]
+                .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+
+            guard !strokes.isEmpty else {
+                throw NSError(domain: "ScratchpadSelfTest", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "No strokes found in \(fileURL.lastPathComponent)",
+                ])
+            }
+
+            if let debugImageURL {
+                try TexoSelectionTensorRenderer.writeDebugPNG(for: strokes, imageSize: 384, to: debugImageURL)
+                print("SELFTEST_IMAGE=\(debugImageURL.path)")
+            }
+            if let debugRawImageURL {
+                try TexoSelectionTensorRenderer.writeRawDebugPNG(for: strokes, to: debugRawImageURL)
+                print("SELFTEST_RAW_IMAGE=\(debugRawImageURL.path)")
+            }
+
+            if ProcessInfo.processInfo.environment["SCRATCHPAD_SELFTEST_DEBUG"] == "1" {
+                let report = try await MLXTexoService.shared.debugReport(
+                    strokes: strokes,
+                    prefixes: [
+                        [0],
+                        [0, 279],
+                        [0, 279, 681],
+                    ]
+                )
+                for line in report {
+                    print(line)
+                }
+            }
+
+            let tokenIDs = try await MLXTexoService.shared.predictTokenIDs(strokes: strokes)
+            let latex = try await MLXTexoService.shared.recognize(strokes: strokes)
+            print("SELFTEST_FILE=\(fileURL.path)")
+            print("SELFTEST_TITLE=\(file.title)")
+            print("SELFTEST_STROKES=\(strokes.count)")
+            print("SELFTEST_TOKEN_IDS=\(tokenIDs)")
+            print("SELFTEST_LATEX=\(latex)")
+            fflush(stdout)
+            NSApp.terminate(nil)
+        } catch {
+            fputs("SELFTEST_ERROR=\(error.localizedDescription)\n", stderr)
+            fflush(stderr)
+            NSApp.terminate(nil)
+        }
     }
 }
 

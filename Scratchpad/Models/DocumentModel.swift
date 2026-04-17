@@ -231,6 +231,8 @@ final class DocumentModel: ObservableObject {
                 case .text(var content):
                     content.color = cc
                     items[i].kind = .text(content)
+                case .latex:
+                    break
                 case .shape(let kind, _, let w):
                     items[i].kind = .shape(kind, cc, w)
                 case .image: break
@@ -377,6 +379,106 @@ final class DocumentModel: ObservableObject {
         undoManager?.setActionName("Delete")
         undoManager?.endUndoGrouping()
         selection.removeAll()
+    }
+
+    var selectedStrokes: [Stroke] {
+        strokes.filter { selection.contains($0.id) }
+    }
+
+    var hasConvertibleInkSelection: Bool {
+        selectionHasOnlyStrokes && !selectedStrokes.isEmpty
+    }
+
+    var selectionHasOnlyStrokes: Bool {
+        !selection.isEmpty && selectedStrokes.count == selection.count
+    }
+
+    var selectedLatexItem: CanvasItem? {
+        guard selection.count == 1, let selectedID = selection.first else { return nil }
+        guard let item = items.first(where: { $0.id == selectedID }) else { return nil }
+        guard case .latex = item.kind else { return nil }
+        return item
+    }
+
+    @discardableResult
+    func replaceStrokes(
+        ids strokeIDs: Set<UUID>,
+        withLatex latex: String,
+        renderedPNGData: Data?,
+        originalBounds: CGRect
+    ) -> UUID? {
+        let sourceStrokes = strokes.filter { strokeIDs.contains($0.id) }
+        guard !sourceStrokes.isEmpty else { return nil }
+
+        let sourceBounds = combinedBounds(strokes: sourceStrokes, items: [])
+        let textColor = sourceStrokes.last?.color ?? CodableColor(.primary)
+        let baseWidth = max(sourceBounds.width + 24, 96)
+        let baseHeight = max(sourceBounds.height + 20, 48)
+        let item = CanvasItem(
+            frame: CGRect(
+                x: originalBounds.minX,
+                y: originalBounds.minY,
+                width: baseWidth,
+                height: baseHeight
+            ),
+            kind: .latex(.init(
+                latex: latex,
+                color: textColor,
+                renderedPNGData: renderedPNGData,
+                sourceStrokes: sourceStrokes
+            ))
+        )
+
+        undoManager?.beginUndoGrouping()
+        for id in strokeIDs {
+            removeStroke(id: id, registerUndo: true)
+        }
+        addItem(item, registerUndo: true)
+        selection = [item.id]
+        undoManager?.setActionName("Convert to LaTeX")
+        undoManager?.endUndoGrouping()
+        return item.id
+    }
+
+    @discardableResult
+    func updateLatexItem(
+        id: UUID,
+        renderedPNGData: Data?,
+        preferredSize: CGSize?
+    ) -> UUID? {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return nil }
+        guard case .latex(var content) = items[index].kind else { return nil }
+
+        content.renderedPNGData = renderedPNGData
+        items[index].kind = .latex(content)
+
+        if let preferredSize,
+           preferredSize.width.isFinite,
+           preferredSize.height.isFinite {
+            let paddedWidth = max(preferredSize.width + 18, 72)
+            let paddedHeight = max(preferredSize.height + 18, 42)
+            items[index].frame.size = CGSize(width: paddedWidth, height: paddedHeight)
+        }
+
+        bumpModified()
+        return id
+    }
+
+    @discardableResult
+    func revertLatexItemToStrokes(id: UUID) -> [UUID] {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return [] }
+        guard case .latex(let content) = items[index].kind else { return [] }
+
+        undoManager?.beginUndoGrouping()
+        removeItem(id: id, registerUndo: true)
+        for stroke in content.sourceStrokes {
+            addStroke(stroke, registerUndo: true)
+        }
+        let restoredIDs = content.sourceStrokes.map(\.id)
+        selection = Set(restoredIDs)
+        undoManager?.setActionName("Convert to Handwriting")
+        undoManager?.endUndoGrouping()
+        return restoredIDs
     }
 
     /// Append one more page in `.page` mode (undoable).
@@ -528,6 +630,7 @@ final class DocumentModel: ObservableObject {
     private func itemActionName(_ item: CanvasItem) -> String {
         switch item.kind {
         case .text: return "Text"
+        case .latex: return "Equation"
         case .shape: return "Shape"
         case .image: return "Image"
         }

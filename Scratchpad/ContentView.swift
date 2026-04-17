@@ -30,6 +30,9 @@ struct ContentView: View {
     @State private var cursorHidden: Bool = false
     @State private var cmdHeld: Bool = false
     @State private var hostWindow: NSWindow?
+    @State private var isConvertingLatex: Bool = false
+    @State private var isSelectionMenuExpanded: Bool = false
+    @State private var latexErrorMessage: String?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -42,6 +45,19 @@ struct ContentView: View {
                 onInteractionBegin: resignFirstResponder
             )
             .zIndex(5)
+
+            if let actionRect = selectionActionRect {
+                SelectionContextMenu(
+                    rect: actionRect,
+                    isExpanded: $isSelectionMenuExpanded,
+                    isBusy: isConvertingLatex,
+                    mode: selectionActionMode,
+                    onConvert: convertSelectionToLatex,
+                    onCopyLatex: copySelectedLatex,
+                    onRevertToHandwriting: revertSelectedLatex
+                )
+                .zIndex(8)
+            }
 
             ToolbarView(
                 doc: doc,
@@ -57,6 +73,14 @@ struct ContentView: View {
             .zIndex(10)
         }
         .frame(minWidth: 900, minHeight: 620)
+        .alert("LaTeX Conversion Failed", isPresented: Binding(
+            get: { latexErrorMessage != nil },
+            set: { if !$0 { latexErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { latexErrorMessage = nil }
+        } message: {
+            Text(latexErrorMessage ?? "")
+        }
         .background(
             WindowAccessor { window in
                 hostWindow = window
@@ -90,6 +114,12 @@ struct ContentView: View {
                 editingTextID = nil
                 resignFirstResponder()
             }
+        }
+        .onChange(of: doc.selection) { _, _ in
+            isSelectionMenuExpanded = false
+        }
+        .onChange(of: isConvertingLatex) { _, converting in
+            if converting { isSelectionMenuExpanded = true }
         }
     }
 
@@ -182,6 +212,32 @@ struct ContentView: View {
             y: rect.minY + t.y * rect.height
         )
         return screenToDocument(screenPoint, in: size)
+    }
+
+    private func documentToScreenRect(_ rect: CGRect, in size: CGSize) -> CGRect {
+        let cx = size.width / 2 + doc.panOffset.width
+        let cy = size.height / 2 + doc.panOffset.height
+        return CGRect(
+            x: cx + rect.origin.x * doc.zoom,
+            y: cy + rect.origin.y * doc.zoom,
+            width: rect.width * doc.zoom,
+            height: rect.height * doc.zoom
+        )
+    }
+
+    private var selectionActionRect: CGRect? {
+        guard !doc.selection.isEmpty, viewportSize != .zero else { return nil }
+        if doc.hasConvertibleInkSelection || doc.selectedLatexItem != nil {
+            return documentToScreenRect(doc.selectionBounds, in: viewportSize)
+        }
+        return nil
+    }
+
+    private var selectionActionMode: SelectionContextMenu.Mode {
+        if doc.selectedLatexItem != nil {
+            return .renderedLatex
+        }
+        return .inkSelection
     }
 
     private func applyZoom(factor: CGFloat, anchor: CGPoint, in size: CGSize) {
@@ -279,6 +335,54 @@ struct ContentView: View {
 
     private func resignFirstResponder() {
         NSApp.keyWindow?.makeFirstResponder(nil)
+    }
+
+    private func convertSelectionToLatex() {
+        let selectedStrokes = doc.selectedStrokes
+        guard doc.hasConvertibleInkSelection, !selectedStrokes.isEmpty, !isConvertingLatex else { return }
+
+        isConvertingLatex = true
+        let strokeIDs = Set(selectedStrokes.map(\.id))
+        let originalBounds = doc.combinedBounds(strokes: selectedStrokes, items: [])
+        let renderColor = selectedStrokes.last?.color ?? CodableColor(.primary)
+
+        Task {
+            do {
+                let latex = try await Task.detached(priority: .userInitiated) {
+                    try await MLXTexoService.shared.recognize(strokes: selectedStrokes)
+                }.value
+
+                let trimmed = latex.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    throw TexoMLXError.emptyPrediction
+                }
+
+                let render = try await LatexRenderer.shared.renderPNG(latex: trimmed, color: renderColor)
+                _ = doc.replaceStrokes(
+                    ids: strokeIDs,
+                    withLatex: trimmed,
+                    renderedPNGData: render.data,
+                    originalBounds: originalBounds
+                )
+            } catch {
+                latexErrorMessage = error.localizedDescription
+            }
+            isConvertingLatex = false
+        }
+    }
+
+    private func copySelectedLatex() {
+        guard let item = doc.selectedLatexItem,
+              case .latex(let content) = item.kind,
+              !content.latex.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(content.latex, forType: .string)
+    }
+
+    private func revertSelectedLatex() {
+        guard let item = doc.selectedLatexItem else { return }
+        _ = doc.revertLatexItemToStrokes(id: item.id)
     }
 
     // MARK: - Page layout overlay
@@ -642,6 +746,118 @@ struct ContentView: View {
             )
         }
         .frame(width: size.width, height: size.height)
+    }
+}
+
+private struct SelectionContextMenu: View {
+    enum Mode {
+        case inkSelection
+        case renderedLatex
+    }
+
+    let rect: CGRect
+    @Binding var isExpanded: Bool
+    let isBusy: Bool
+    let mode: Mode
+    let onConvert: () -> Void
+    let onCopyLatex: () -> Void
+    let onRevertToHandwriting: () -> Void
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    switch mode {
+                    case .inkSelection:
+                        actionButton(
+                            label: isBusy ? "Converting..." : "Convert to LaTeX",
+                            systemImage: isBusy ? "hourglass" : "function",
+                            disabled: isBusy,
+                            action: onConvert
+                        )
+                    case .renderedLatex:
+                        actionButton(
+                            label: "Copy LaTeX",
+                            systemImage: "doc.on.doc",
+                            disabled: false,
+                            action: onCopyLatex
+                        )
+                        actionButton(
+                            label: "Back to Handwriting",
+                            systemImage: "scribble.variable",
+                            disabled: false,
+                            action: onRevertToHandwriting
+                        )
+                    }
+                }
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            Button {
+                withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                Group {
+                    if isBusy {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 14, weight: .bold))
+                    }
+                }
+                .foregroundStyle(.primary)
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle().fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.12), radius: 14, x: 0, y: 6)
+            }
+            .buttonStyle(.plain)
+        }
+        .position(
+            x: max(rect.maxX - 12, 24),
+            y: max(rect.minY - 18, 42)
+        )
+    }
+
+    private func actionButton(label: String, systemImage: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 14)
+                Text(label)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(disabled ? .secondary : .primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(minWidth: 180, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
     }
 }
 

@@ -70,9 +70,42 @@ xcodebuild -project Scratchpad.xcodeproj -scheme Scratchpad -configuration Debug
 ### Dependency Notes
 
 - `OpenMultitouchSupport` is resolved through Swift Package Manager.
+- `MLX` and `MLXNN` are resolved through Swift Package Manager from [`ml-explore/mlx-swift`](https://github.com/ml-explore/mlx-swift).
 - If package resolution is stale/broken, in Xcode run:
   - `File -> Packages -> Reset Package Caches`
   - `File -> Packages -> Resolve Package Versions`
+
+### MLX Texo Model Setup
+
+The LaTeX conversion action expects a converted MLX model directory on disk. Runtime inference happens inside the app in Swift using MLX. The Python script is only for one-time weight conversion.
+
+When you run from Xcode, the app now checks these locations automatically:
+- `.local/TexoMLXModel` inside this worktree
+- `TexoMLXModel` in the built app bundle resources
+- `~/Library/Application Support/Scratchpad/Models/TexoMLX`
+- `SCRATCHPAD_TEXO_MLX_MODEL` if you want to override all of the above
+
+For local development in this worktree, the simplest setup is to make `.local/TexoMLXModel` point at your converted model directory. That keeps the checkpoint out of the app target so Xcode does not copy it into every debug build.
+
+1. Prepare a Texo checkpoint and tokenizer locally.
+2. Convert the checkpoint:
+```bash
+python Tools/convert_texo_to_mlx.py \
+  --checkpoint /path/to/texo_checkpoint.pt \
+  --tokenizer /path/to/Texo/data/tokenizer/tokenizer.json \
+  --config /path/to/texo_model_config.json \
+  --output ~/Library/Application\\ Support/Scratchpad/Models/TexoMLX
+```
+3. Link the converted model into the repo for Xcode:
+```bash
+mkdir -p .local
+ln -sfn ~/Library/Application\\ Support/Scratchpad/Models/TexoMLX .local/TexoMLXModel
+```
+
+Expected files in that directory:
+- `config.json`
+- `tokenizer.json`
+- `weights.safetensors`
 
 ## Current Interaction Notes
 
