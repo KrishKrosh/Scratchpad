@@ -14,10 +14,25 @@ struct NormalizedTouch: Identifiable, Hashable {
     let id: Int32
     let x: CGFloat
     let y: CGFloat
+    let total: CGFloat
     let pressure: CGFloat
+    let majorAxis: CGFloat
+    let minorAxis: CGFloat
+    let angle: CGFloat
+    let density: CGFloat
     let isContact: Bool  // true if physically touching (not just hovering)
     let isHovering: Bool
     let timestamp: TimeInterval
+
+    var contactArea: CGFloat {
+        max(majorAxis, 0.001) * max(minorAxis, 0.001)
+    }
+
+    var axisRatio: CGFloat {
+        let major = max(majorAxis, minorAxis)
+        let minor = max(min(majorAxis, minorAxis), 0.001)
+        return major / minor
+    }
 }
 
 /// Wraps OpenMultitouchSupport and surfaces the latest per-frame set of touches
@@ -82,7 +97,12 @@ final class TrackpadInputManager: ObservableObject {
                 id: d.id,
                 x: nx,
                 y: ny,
+                total: CGFloat(max(0, d.total)),
                 pressure: CGFloat(max(0, d.pressure)),
+                majorAxis: CGFloat(max(0, d.axis.major)),
+                minorAxis: CGFloat(max(0, d.axis.minor)),
+                angle: CGFloat(d.angle),
+                density: CGFloat(max(0, d.density)),
                 isContact: isContact,
                 isHovering: isHovering,
                 timestamp: CACurrentMediaTime()

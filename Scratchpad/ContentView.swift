@@ -25,6 +25,7 @@ struct ContentView: View {
 
     @State private var viewportSize: CGSize = .zero
     @State private var activeTouchIDs: Set<Int32> = []
+    @State private var palmRejectedTouchIDs: Set<Int32> = []
     @State private var previousContactTouchIDs: Set<Int32> = []
     @State private var twoFingerTapCandidate: TwoFingerTapCandidate?
     @State private var lastTwoFingerTapAt: TimeInterval?
@@ -190,6 +191,7 @@ struct ContentView: View {
                         input: input,
                         screenRect: rect,
                         activeTouchIDs: activeTouchIDs,
+                        palmRejectedTouchIDs: palmRejectedTouchIDs,
                         hideIndicator: panZoomActive,
                         onDragChanged: { translation in
                             let dx = translation.width - dragSessionAccum.width
@@ -283,13 +285,21 @@ struct ContentView: View {
 
     private func handleTouches(_ touches: [NormalizedTouch]) {
         let contactTouches = touches.filter(\.isContact)
-        processTwoFingerDoubleTapUndo(contactTouches)
-        guard doc.isDrawingModeActive, doc.tool.canDraw, contactTouches.count == 1 else {
+        updatePalmRejectedTouches(using: contactTouches)
+        let drawableTouches = contactTouches.filter { !palmRejectedTouchIDs.contains($0.id) }
+        processTwoFingerDoubleTapUndo(drawableTouches)
+
+        guard doc.isDrawingModeActive, doc.tool.canDraw else {
             endActiveTouches()
             return
         }
 
-        let t = contactTouches[0]
+        guard drawableTouches.count == 1 else {
+            endActiveTouches()
+            return
+        }
+
+        let t = drawableTouches[0]
         let shouldDraw = shouldDraw(for: t)
 
         if !shouldDraw {
@@ -322,6 +332,85 @@ struct ContentView: View {
             doc.endStroke(id: id)
         }
         activeTouchIDs.removeAll()
+    }
+
+    private func updatePalmRejectedTouches(using contactTouches: [NormalizedTouch]) {
+        let activeIDs = Set(contactTouches.map(\.id))
+        palmRejectedTouchIDs.formIntersection(activeIDs)
+
+        for touch in contactTouches where isDefinitelyPalm(touch) {
+            palmRejectedTouchIDs.insert(touch.id)
+        }
+
+        guard contactTouches.count > 1 else { return }
+
+        let drawableTouches = contactTouches.filter { !palmRejectedTouchIDs.contains($0.id) }
+        guard drawableTouches.count > 1 else { return }
+
+        let anchorTouch: NormalizedTouch
+        if let activeID = activeTouchIDs.first,
+           let activeTouch = drawableTouches.first(where: { $0.id == activeID }) {
+            anchorTouch = activeTouch
+        } else {
+            anchorTouch = drawableTouches.min { lhs, rhs in
+                if lhs.contactArea == rhs.contactArea {
+                    return lhs.total < rhs.total
+                }
+                return lhs.contactArea < rhs.contactArea
+            } ?? drawableTouches[0]
+        }
+
+        for touch in drawableTouches where touch.id != anchorTouch.id {
+            if isLikelyPalm(touch, comparedTo: anchorTouch) {
+                palmRejectedTouchIDs.insert(touch.id)
+            }
+        }
+    }
+
+    private func isDefinitelyPalm(_ touch: NormalizedTouch) -> Bool {
+        let edgeBias = palmEdgeBias(for: touch)
+
+        if edgeBias >= 0.92 && touch.contactArea >= 0.12 {
+            return true
+        }
+        if edgeBias >= 0.88 && touch.contactArea >= 0.08 {
+            return true
+        }
+        if edgeBias >= 0.82 && touch.total >= 0.5 && touch.contactArea >= 0.045 {
+            return true
+        }
+
+        return false
+    }
+
+    private func isLikelyPalm(_ touch: NormalizedTouch, comparedTo anchor: NormalizedTouch) -> Bool {
+        let areaRatio = touch.contactArea / max(anchor.contactArea, 0.001)
+        let totalRatio = touch.total / max(anchor.total, 0.001)
+        let densityRatio = touch.density / max(anchor.density, 0.001)
+        let edgeBias = palmEdgeBias(for: touch)
+
+        if edgeBias >= 0.65 && (areaRatio >= 1.3 || totalRatio >= 1.45) {
+            return true
+        }
+        if areaRatio >= 1.9 || totalRatio >= 2.1 {
+            return true
+        }
+        if areaRatio >= 1.55 && densityRatio <= 0.9 {
+            return true
+        }
+        if edgeBias >= 0.45 && areaRatio >= 1.2 && touch.axisRatio >= 2.4 {
+            return true
+        }
+
+        return false
+    }
+
+    private func palmEdgeBias(for touch: NormalizedTouch) -> CGFloat {
+        let bottomBias = max(0, (touch.y - 0.78) / 0.22)
+        let leftBias = max(0, (0.08 - touch.x) / 0.08)
+        let rightBias = max(0, (touch.x - 0.92) / 0.08)
+        let topBias = max(0, (0.05 - touch.y) / 0.05)
+        return max(bottomBias, leftBias, rightBias, topBias * 0.5)
     }
 
     private func processTwoFingerDoubleTapUndo(_ contactTouches: [NormalizedTouch]) {

@@ -18,6 +18,7 @@ struct TrackpadSurfaceView: View {
     /// Rect of the surface in screen space (fixed — does not follow pan/zoom).
     let screenRect: CGRect
     let activeTouchIDs: Set<Int32>
+    let palmRejectedTouchIDs: Set<Int32>
     /// Suppress finger indicators (e.g. while pan/zoom is active).
     var hideIndicator: Bool = false
     let onDragChanged: (CGSize) -> Void
@@ -100,7 +101,7 @@ struct TrackpadSurfaceView: View {
     }
 
     private func indicatorState(for touch: NormalizedTouch) -> IndicatorDot.State {
-        let contactCount = input.touches.filter(\.isContact).count
+        let drawableCount = input.touches.filter { $0.isContact && !palmRejectedTouchIDs.contains($0.id) }.count
 
         if activeTouchIDs.contains(touch.id) {
             return .drawing(color: currentDrawingColor)
@@ -111,7 +112,10 @@ struct TrackpadSurfaceView: View {
         guard touch.isContact else {
             return .hovering
         }
-        if contactCount != 1 {
+        if palmRejectedTouchIDs.contains(touch.id) {
+            return .blocked
+        }
+        if drawableCount != 1 {
             return .blocked
         }
         return touch.pressure >= AppSettings.beginThreshold(from: drawingPressureThreshold)
