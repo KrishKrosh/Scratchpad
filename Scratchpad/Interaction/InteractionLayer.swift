@@ -30,9 +30,11 @@ struct InteractionLayer: View {
     @State private var resizeHandle: ResizeHandle = .bottomRight
     @State private var resizeCumulativeSX: CGFloat = 1
     @State private var resizeCumulativeSY: CGFloat = 1
+    @State private var shapeStartDoc: CGPoint? = nil
+    @State private var shapePreview: SelectionLayer.ShapePreview? = nil
 
     private enum Mode {
-        case idle, moving, marquee, lasso, resizing
+        case idle, moving, marquee, lasso, resizing, drawingShape
     }
 
     private enum ResizeHandle: Int {
@@ -74,7 +76,7 @@ struct InteractionLayer: View {
                     selectionRect: doc.selection.isEmpty ? nil : doc.selectionBounds,
                     marqueeRect: mode == .marquee ? marquee : nil,
                     lassoPath: mode == .lasso ? lassoPoints : nil,
-                    shapePreview: nil,
+                    shapePreview: mode == .drawingShape ? shapePreview : nil,
                     panOffset: doc.panOffset,
                     zoom: doc.zoom,
                     showHandles: !doc.selection.isEmpty
@@ -166,6 +168,16 @@ struct InteractionLayer: View {
         if ddx * ddx + ddy * ddy > 9 { dragMovedSignificantly = true }
 
         switch mode {
+        case .drawingShape:
+            guard let startDoc = shapeStartDoc else { return }
+            let currentDoc = screenToDoc(current, in: size)
+            shapePreview = SelectionLayer.ShapePreview(
+                kind: doc.shapeKind,
+                color: doc.color,
+                width: doc.shapeStrokeWidth,
+                rect: shapeRect(from: startDoc, to: currentDoc)
+            )
+
         case .moving:
             guard let prev = moveStartDoc else { return }
             let docP = screenToDoc(current, in: size)
@@ -225,6 +237,13 @@ struct InteractionLayer: View {
     }
 
     private func determineMode(at start: CGPoint, in size: CGSize) {
+        if doc.tool == .shape {
+            mode = .drawingShape
+            shapeStartDoc = screenToDoc(start, in: size)
+            shapePreview = nil
+            return
+        }
+
         if let handle = resizeHandleHit(start, in: size) {
             mode = .resizing
             resizeInitialSel = doc.selectionBounds
@@ -280,9 +299,22 @@ struct InteractionLayer: View {
             moveIDs = []
             resizeCumulativeSX = 1
             resizeCumulativeSY = 1
+            shapeStartDoc = nil
+            shapePreview = nil
         }
 
         switch mode {
+        case .drawingShape:
+            guard dragMovedSignificantly, let startDoc = shapeStartDoc else { break }
+            let endDoc = screenToDoc(endLocation, in: size)
+            let rect = shapeRect(from: startDoc, to: endDoc)
+            let item = CanvasItem(
+                frame: rect,
+                kind: .shape(doc.shapeKind, CodableColor(doc.color), doc.shapeStrokeWidth)
+            )
+            doc.addItem(item)
+            doc.selection = [item.id]
+
         case .marquee:
             if dragMovedSignificantly, let r = marquee, r.width > 4 || r.height > 4 {
                 let p0 = screenToDoc(CGPoint(x: r.minX, y: r.minY), in: size)
@@ -317,6 +349,20 @@ struct InteractionLayer: View {
 
         case .moving, .resizing, .idle:
             break
+        }
+    }
+
+    private func shapeRect(from start: CGPoint, to end: CGPoint) -> CGRect {
+        let minX = min(start.x, end.x)
+        let minY = min(start.y, end.y)
+        let width = abs(end.x - start.x)
+        let height = abs(end.y - start.y)
+
+        switch doc.shapeKind {
+        case .line, .arrow:
+            return CGRect(x: minX, y: minY, width: max(width, 2), height: max(height, 2))
+        case .rectangle, .ellipse:
+            return CGRect(x: minX, y: minY, width: max(width, 2), height: max(height, 2))
         }
     }
 

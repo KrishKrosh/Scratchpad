@@ -706,6 +706,7 @@ struct ContentView: View {
             }
 
             guard event.clickCount == 2 else { return event }
+            guard doc.tool == .text, !doc.isDrawingModeActive else { return event }
             createTextBox(at: docPoint, switchTool: true)
             return nil
         }
