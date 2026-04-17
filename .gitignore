@@ -9,3 +9,6 @@ build/
 
 # macOS
 .DS_Store
+
+# Local model checkpoints
+.local/

@@ -3,6 +3,7 @@
 //  Scratchpad
 //
 
+import Foundation
 import SwiftUI
 
 @main

@@ -30,6 +30,13 @@ struct ContentView: View {
     @State private var cursorHidden: Bool = false
     @State private var cmdHeld: Bool = false
     @State private var hostWindow: NSWindow?
+    @State private var isConvertingLatex: Bool = false
+    @State private var latexErrorMessage: String?
+    /// Screen-space rect we play the diffusion overlay over. Captured at the
+    /// moment a conversion begins so the overlay stays anchored even after
+    /// `replaceStrokes` swaps selection to the new LaTeX item.
+    @State private var latexAnimationRect: CGRect?
+    @State private var latexAnimationClearTask: Task<Void, Never>?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -42,6 +49,22 @@ struct ContentView: View {
                 onInteractionBegin: resignFirstResponder
             )
             .zIndex(5)
+
+            DiffusionOverlay(rect: latexAnimationRect)
+                .zIndex(6)
+
+            if let actionRect = selectionActionRect {
+                SelectionContextMenu(
+                    rect: actionRect,
+                    isBusy: isConvertingLatex,
+                    mode: selectionActionMode,
+                    selectionKey: AnyHashable(doc.selection),
+                    onConvert: convertSelectionToLatex,
+                    onCopyLatex: copySelectedLatex,
+                    onRevertToHandwriting: revertSelectedLatex
+                )
+                .zIndex(8)
+            }
 
             ToolbarView(
                 doc: doc,
@@ -57,6 +80,14 @@ struct ContentView: View {
             .zIndex(10)
         }
         .frame(minWidth: 900, minHeight: 620)
+        .alert("LaTeX Conversion Failed", isPresented: Binding(
+            get: { latexErrorMessage != nil },
+            set: { if !$0 { latexErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { latexErrorMessage = nil }
+        } message: {
+            Text(latexErrorMessage ?? "")
+        }
         .background(
             WindowAccessor { window in
                 hostWindow = window
@@ -184,6 +215,32 @@ struct ContentView: View {
         return screenToDocument(screenPoint, in: size)
     }
 
+    private func documentToScreenRect(_ rect: CGRect, in size: CGSize) -> CGRect {
+        let cx = size.width / 2 + doc.panOffset.width
+        let cy = size.height / 2 + doc.panOffset.height
+        return CGRect(
+            x: cx + rect.origin.x * doc.zoom,
+            y: cy + rect.origin.y * doc.zoom,
+            width: rect.width * doc.zoom,
+            height: rect.height * doc.zoom
+        )
+    }
+
+    private var selectionActionRect: CGRect? {
+        guard !doc.selection.isEmpty, viewportSize != .zero else { return nil }
+        if doc.hasConvertibleInkSelection || doc.selectedLatexItem != nil {
+            return documentToScreenRect(doc.selectionBounds, in: viewportSize)
+        }
+        return nil
+    }
+
+    private var selectionActionMode: SelectionContextMenu.Mode {
+        if doc.selectedLatexItem != nil {
+            return .renderedLatex
+        }
+        return .inkSelection
+    }
+
     private func applyZoom(factor: CGFloat, anchor: CGPoint, in size: CGSize) {
         let newZoom = max(0.25, min(6.0, doc.zoom * factor))
         if newZoom == doc.zoom { return }
@@ -279,6 +336,91 @@ struct ContentView: View {
 
     private func resignFirstResponder() {
         NSApp.keyWindow?.makeFirstResponder(nil)
+    }
+
+    private func convertSelectionToLatex() {
+        let selectedStrokes = doc.selectedStrokes
+        guard doc.hasConvertibleInkSelection, !selectedStrokes.isEmpty, !isConvertingLatex else { return }
+
+        isConvertingLatex = true
+        let strokeIDs = Set(selectedStrokes.map(\.id))
+        let originalBounds = doc.combinedBounds(strokes: selectedStrokes, items: [])
+        let renderColor = selectedStrokes.last?.color ?? CodableColor(.primary)
+
+        // Capture the selection rect in screen space so the diffusion overlay
+        // stays put even after `replaceStrokes` moves the selection to the
+        // newly created LaTeX item.
+        startLatexAnimation(screenRect: documentToScreenRect(originalBounds, in: viewportSize))
+
+        Task {
+            do {
+                let latex = try await Task.detached(priority: .userInitiated) {
+                    try await MLXTexoService.shared.recognize(strokes: selectedStrokes)
+                }.value
+
+                let trimmed = latex.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    throw TexoMLXError.emptyPrediction
+                }
+
+                let render = try await LatexRenderer.shared.renderPNG(latex: trimmed, color: renderColor)
+                _ = doc.replaceStrokes(
+                    ids: strokeIDs,
+                    withLatex: trimmed,
+                    renderedPNGData: render.data,
+                    originalBounds: originalBounds
+                )
+            } catch {
+                latexErrorMessage = error.localizedDescription
+            }
+            isConvertingLatex = false
+            // Hold the diffusion overlay briefly after the swap so the new
+            // LaTeX appears to resolve out of the flash instead of snapping in.
+            scheduleLatexAnimationEnd(after: 0.35)
+        }
+    }
+
+    private func copySelectedLatex() {
+        guard let item = doc.selectedLatexItem,
+              case .latex(let content) = item.kind,
+              !content.latex.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(content.latex, forType: .string)
+    }
+
+    private func revertSelectedLatex() {
+        guard let item = doc.selectedLatexItem else { return }
+
+        let screenRect = documentToScreenRect(item.frame, in: viewportSize)
+        startLatexAnimation(screenRect: screenRect)
+
+        // Delay the actual swap slightly so the diffusion flash is visible
+        // before the strokes pop back. Revert is synchronous, unlike convert,
+        // so without this the animation wouldn't register.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            _ = doc.revertLatexItemToStrokes(id: item.id)
+            scheduleLatexAnimationEnd(after: 0.30)
+        }
+    }
+
+    // MARK: - LaTeX diffusion animation
+
+    private func startLatexAnimation(screenRect: CGRect) {
+        latexAnimationClearTask?.cancel()
+        latexAnimationClearTask = nil
+        latexAnimationRect = screenRect
+    }
+
+    private func scheduleLatexAnimationEnd(after seconds: TimeInterval) {
+        latexAnimationClearTask?.cancel()
+        let task = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            if Task.isCancelled { return }
+            latexAnimationRect = nil
+        }
+        latexAnimationClearTask = task
     }
 
     // MARK: - Page layout overlay
