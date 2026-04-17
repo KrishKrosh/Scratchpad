@@ -7,6 +7,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import Combine
+import QuartzCore
 
 struct ContentView: View {
     let fileURL: URL?
@@ -17,12 +18,20 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage(AppSettings.drawingPressureThresholdKey)
     private var drawingPressureThreshold = AppSettings.defaultDrawingPressureThreshold
+    @AppStorage(AppSettings.keyboardPanSensitivityKey)
+    private var keyboardPanSensitivity = AppSettings.defaultKeyboardPanSensitivity
+    @AppStorage(AppSettings.twoFingerDoubleTapUndoEnabledKey)
+    private var twoFingerDoubleTapUndoEnabled = AppSettings.defaultTwoFingerDoubleTapUndoEnabled
 
     @State private var viewportSize: CGSize = .zero
     @State private var activeTouchIDs: Set<Int32> = []
+    @State private var previousContactTouchIDs: Set<Int32> = []
+    @State private var twoFingerTapCandidate: TwoFingerTapCandidate?
+    @State private var lastTwoFingerTapAt: TimeInterval?
     @State private var dragSessionAccum: CGSize = .zero
     @State private var scrollMonitor: Any?
     @State private var keyMonitor: Any?
+    @State private var keyUpMonitor: Any?
     @State private var flagsMonitor: Any?
     @State private var mouseDownMonitor: Any?
     @State private var editingTextID: UUID?
@@ -39,6 +48,19 @@ struct ContentView: View {
     /// `replaceStrokes` swaps selection to the new LaTeX item.
     @State private var latexAnimationRect: CGRect?
     @State private var latexAnimationClearTask: Task<Void, Never>?
+    @State private var activePanDirections: Set<PanDirection> = []
+    @State private var keyboardPanVelocity: CGSize = .zero
+    @State private var keyboardPanTask: Task<Void, Never>?
+
+    private struct TwoFingerTapCandidate {
+        let startedAt: TimeInterval
+        let startLocations: [Int32: CGPoint]
+        var maxTravel: CGFloat
+    }
+
+    private enum PanDirection: Hashable {
+        case left, right, up, down
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -47,7 +69,6 @@ struct ContentView: View {
             InteractionLayer(
                 doc: doc,
                 isTextEditing: editingTextID != nil,
-                onBeginTextEdit: { editingTextID = $0 },
                 onInteractionBegin: resignFirstResponder
             )
             .zIndex(5)
@@ -102,6 +123,7 @@ struct ContentView: View {
         }
         .onDisappear {
             input.stop()
+            stopKeyboardPan()
             removeMonitors()
             saveNow()
             showCursor()
@@ -261,6 +283,7 @@ struct ContentView: View {
 
     private func handleTouches(_ touches: [NormalizedTouch]) {
         let contactTouches = touches.filter(\.isContact)
+        processTwoFingerDoubleTapUndo(contactTouches)
         guard doc.isDrawingModeActive, doc.tool.canDraw, contactTouches.count == 1 else {
             endActiveTouches()
             return
@@ -299,6 +322,57 @@ struct ContentView: View {
             doc.endStroke(id: id)
         }
         activeTouchIDs.removeAll()
+    }
+
+    private func processTwoFingerDoubleTapUndo(_ contactTouches: [NormalizedTouch]) {
+        guard twoFingerDoubleTapUndoEnabled else {
+            twoFingerTapCandidate = nil
+            previousContactTouchIDs = Set(contactTouches.map(\.id))
+            return
+        }
+
+        let contactIDs = Set(contactTouches.map(\.id))
+        let now = contactTouches.map(\.timestamp).max() ?? CACurrentMediaTime()
+
+        if contactTouches.count == 2 {
+            if previousContactTouchIDs != contactIDs || twoFingerTapCandidate == nil {
+                twoFingerTapCandidate = TwoFingerTapCandidate(
+                    startedAt: now,
+                    startLocations: Dictionary(uniqueKeysWithValues: contactTouches.map {
+                        ($0.id, CGPoint(x: $0.x, y: $0.y))
+                    }),
+                    maxTravel: 0
+                )
+            } else if var candidate = twoFingerTapCandidate {
+                let travel = contactTouches.compactMap { touch -> CGFloat? in
+                    guard let start = candidate.startLocations[touch.id] else { return nil }
+                    let dx = touch.x - start.x
+                    let dy = touch.y - start.y
+                    return sqrt(dx * dx + dy * dy)
+                }.max() ?? 0
+                candidate.maxTravel = max(candidate.maxTravel, travel)
+                twoFingerTapCandidate = candidate
+            }
+        } else if previousContactTouchIDs.count == 2 {
+            if let candidate = twoFingerTapCandidate,
+               isTwoFingerTap(candidate, endedAt: now) {
+                if let lastTapAt = lastTwoFingerTapAt, now - lastTapAt <= 0.35 {
+                    envUndoManager?.undo()
+                    lastTwoFingerTapAt = nil
+                } else {
+                    lastTwoFingerTapAt = now
+                }
+            }
+            twoFingerTapCandidate = nil
+        } else if contactTouches.count > 2 {
+            twoFingerTapCandidate = nil
+        }
+
+        previousContactTouchIDs = contactIDs
+    }
+
+    private func isTwoFingerTap(_ candidate: TwoFingerTapCandidate, endedAt now: TimeInterval) -> Bool {
+        now - candidate.startedAt <= 0.22 && candidate.maxTravel <= 0.035
     }
 
     private func updateTextItem(_ id: UUID, _ text: String) {
@@ -486,10 +560,16 @@ struct ContentView: View {
             return handleKeyDown(event)
         }
 
+        keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { event in
+            guard isEventInHostWindow(event) else { return event }
+            return handleKeyUp(event)
+        }
+
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
             guard isEventInHostWindow(event) else { return event }
             let nextCmd = event.modifierFlags.contains(.command)
             if nextCmd != cmdHeld { cmdHeld = nextCmd }
+            if nextCmd { stopKeyboardPan() }
             return event
         }
 
@@ -498,8 +578,7 @@ struct ContentView: View {
             let contentView = window.contentView
             let locWindow = event.locationInWindow
             if let contentView, contentView.bounds.contains(contentView.convert(locWindow, from: nil)) {
-                let locContent = contentView.convert(locWindow, from: nil)
-                let anchor = CGPoint(x: locContent.x, y: contentView.bounds.height - locContent.y)
+                let anchor = contentPoint(in: contentView, fromWindowPoint: locWindow)
                 if event.type == .scrollWheel {
                     panZoomActiveUntil = Date().addingTimeInterval(0.4)
                     if event.modifierFlags.contains(.command) {
@@ -525,7 +604,7 @@ struct ContentView: View {
             guard isEventInHostWindow(event) else { return event }
             let locContent = contentView.convert(event.locationInWindow, from: nil)
             guard contentView.bounds.contains(locContent) else { return event }
-            let point = CGPoint(x: locContent.x, y: contentView.bounds.height - locContent.y)
+            let point = contentPoint(in: contentView, fromWindowPoint: event.locationInWindow)
             let docPoint = screenToDocument(point, in: viewportSize)
 
             // While editing text in Text tool, clicking outside the text content
@@ -535,23 +614,17 @@ struct ContentView: View {
                     editingTextID = nil
                     resignFirstResponder()
                 }
-                return event
             }
 
             guard event.clickCount == 2 else { return event }
-            guard doc.tool == .select, editingTextID == nil else { return event }
-            guard let textID = textItemID(at: docPoint) else { return event }
-            doc.selection = [textID]
-            doc.tool = .text
-            DispatchQueue.main.async {
-                editingTextID = textID
-            }
+            createTextBox(at: docPoint, switchTool: true)
             return nil
         }
     }
 
     private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
         if event.keyCode == 53, editingTextID != nil {
+            stopKeyboardPan()
             editingTextID = nil
             resignFirstResponder()
             return nil
@@ -562,7 +635,13 @@ struct ContentView: View {
 
         let cmd = event.modifierFlags.contains(.command)
         let shift = event.modifierFlags.contains(.shift)
-        let chars = event.charactersIgnoringModifiers ?? ""
+        let chars = (event.charactersIgnoringModifiers ?? "").lowercased()
+
+        if !cmd, let direction = panDirection(for: event) {
+            activePanDirections.insert(direction)
+            startKeyboardPan(boosted: shift)
+            return nil
+        }
 
         // ⌘1..6 — select corresponding tool
         if cmd, let digit = Int(chars), digit >= 1, digit <= ToolKind.allCases.count {
@@ -571,10 +650,12 @@ struct ContentView: View {
         }
 
         if cmd, chars == "d" {
+            stopKeyboardPan()
             doc.isDrawingModeActive.toggle()
             return nil
         }
         if event.keyCode == 53 {
+            stopKeyboardPan()
             if doc.isDrawingModeActive { doc.isDrawingModeActive = false; return nil }
             if !doc.selection.isEmpty { doc.selection.removeAll(); return nil }
             return event
@@ -605,8 +686,133 @@ struct ContentView: View {
         return event
     }
 
+    private func handleKeyUp(_ event: NSEvent) -> NSEvent? {
+        if let direction = panDirection(for: event) {
+            activePanDirections.remove(direction)
+            if activePanDirections.isEmpty {
+                stopKeyboardPan()
+            }
+            return nil
+        }
+        return event
+    }
+
+    private func panDirection(for event: NSEvent) -> PanDirection? {
+        switch event.keyCode {
+        case 123:
+            return .left
+        case 124:
+            return .right
+        case 125:
+            return .down
+        case 126:
+            return .up
+        default:
+            break
+        }
+
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "a":
+            return .left
+        case "d":
+            return .right
+        case "w":
+            return .up
+        case "s":
+            return .down
+        default:
+            return nil
+        }
+    }
+
+    private func startKeyboardPan(boosted: Bool) {
+        guard keyboardPanTask == nil else { return }
+
+        let baseSpeed = CGFloat(keyboardPanSensitivity) * (boosted ? 14 : 8)
+        let maxSpeed = baseSpeed * 4.2
+        let acceleration = baseSpeed * 10
+        let deceleration = baseSpeed * 14
+
+        keyboardPanTask = Task { @MainActor in
+            var lastTime = CACurrentMediaTime()
+
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                if Task.isCancelled { break }
+
+                let now = CACurrentMediaTime()
+                let dt = CGFloat(now - lastTime)
+                lastTime = now
+                guard dt > 0 else { continue }
+
+                let axis = panAxisVector()
+                let hasInput = axis != .zero
+
+                keyboardPanVelocity.width = approach(
+                    current: keyboardPanVelocity.width,
+                    target: axis.width * maxSpeed,
+                    rate: hasInput ? acceleration : deceleration,
+                    dt: dt
+                )
+                keyboardPanVelocity.height = approach(
+                    current: keyboardPanVelocity.height,
+                    target: axis.height * maxSpeed,
+                    rate: hasInput ? acceleration : deceleration,
+                    dt: dt
+                )
+
+                if hasInput ||
+                    abs(keyboardPanVelocity.width) > 0.1 ||
+                    abs(keyboardPanVelocity.height) > 0.1 {
+                    doc.panOffset.width += keyboardPanVelocity.width * dt
+                    doc.panOffset.height += keyboardPanVelocity.height * dt
+                    panZoomActiveUntil = Date().addingTimeInterval(0.12)
+                } else {
+                    keyboardPanVelocity = .zero
+                    keyboardPanTask = nil
+                    break
+                }
+            }
+        }
+    }
+
+    private func stopKeyboardPan() {
+        activePanDirections.removeAll()
+        keyboardPanTask?.cancel()
+        keyboardPanTask = nil
+        keyboardPanVelocity = .zero
+    }
+
+    private func panAxisVector() -> CGSize {
+        var dx: CGFloat = 0
+        var dy: CGFloat = 0
+
+        if activePanDirections.contains(.left) { dx += 1 }
+        if activePanDirections.contains(.right) { dx -= 1 }
+        if activePanDirections.contains(.up) { dy += 1 }
+        if activePanDirections.contains(.down) { dy -= 1 }
+
+        if dx != 0, dy != 0 {
+            let scale = CGFloat(1 / sqrt(2.0))
+            dx *= scale
+            dy *= scale
+        }
+
+        return CGSize(width: dx, height: dy)
+    }
+
+    private func approach(current: CGFloat, target: CGFloat, rate: CGFloat, dt: CGFloat) -> CGFloat {
+        let delta = target - current
+        let step = rate * dt
+        if abs(delta) <= step {
+            return target
+        }
+        return current + step * (delta > 0 ? 1 : -1)
+    }
+
     private func removeMonitors() {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        if let m = keyUpMonitor { NSEvent.removeMonitor(m); keyUpMonitor = nil }
         if let m = scrollMonitor { NSEvent.removeMonitor(m); scrollMonitor = nil }
         if let m = flagsMonitor { NSEvent.removeMonitor(m); flagsMonitor = nil }
         if let m = mouseDownMonitor { NSEvent.removeMonitor(m); mouseDownMonitor = nil }
@@ -620,13 +826,10 @@ struct ContentView: View {
         return hostWindow.isKeyWindow
     }
 
-    private func textItemID(at p: CGPoint) -> UUID? {
-        for item in doc.items.reversed() {
-            if case .text = item.kind, item.frame.insetBy(dx: -4, dy: -4).contains(p) {
-                return item.id
-            }
-        }
-        return nil
+    private func contentPoint(in view: NSView, fromWindowPoint point: CGPoint) -> CGPoint {
+        let local = view.convert(point, from: nil)
+        let y = view.isFlipped ? local.y : (view.bounds.height - local.y)
+        return CGPoint(x: local.x, y: y)
     }
 
     private func isPointInsideTextContent(_ p: CGPoint, itemID: UUID) -> Bool {
@@ -636,6 +839,31 @@ struct ContentView: View {
         let insetY = min(6, max(1, item.frame.height * 0.45))
         let contentRect = item.frame.insetBy(dx: insetX, dy: insetY)
         return contentRect.contains(p)
+    }
+
+    private func createTextBox(at point: CGPoint, switchTool: Bool) {
+        let rect = CGRect(
+            x: point.x,
+            y: point.y,
+            width: 220,
+            height: max(32, doc.textFontSize * 1.6)
+        )
+        let item = CanvasItem(
+            frame: rect,
+            kind: .text(.init(
+                text: "",
+                fontSize: doc.textFontSize,
+                color: CodableColor(doc.color)
+            ))
+        )
+        doc.addItem(item)
+        doc.selection = [item.id]
+        if switchTool {
+            doc.tool = .text
+        }
+        DispatchQueue.main.async {
+            editingTextID = item.id
+        }
     }
 
     private func fittedTextHeight(text: String, fontSize: CGFloat, width: CGFloat) -> CGFloat {

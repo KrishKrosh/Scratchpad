@@ -162,7 +162,7 @@ private struct EditableTextBox: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSTextView {
-        let tv = NSTextView()
+        let tv = CanvasTextView()
         tv.isEditable = true
         tv.isRichText = false
         tv.drawsBackground = false
@@ -171,6 +171,8 @@ private struct EditableTextBox: NSViewRepresentable {
         tv.font = NSFont.systemFont(ofSize: fontSize)
         tv.textColor = NSColor(color)
         tv.focusRingType = .none
+        tv.textContainerInset = NSSize(width: 4, height: 4)
+        tv.textContainer?.lineFragmentPadding = 0
         DispatchQueue.main.async {
             tv.window?.makeFirstResponder(tv)
         }
@@ -199,4 +201,8 @@ private struct EditableTextBox: NSViewRepresentable {
             onEndEditing()
         }
     }
+}
+
+private final class CanvasTextView: NSTextView {
+    override var isFlipped: Bool { true }
 }

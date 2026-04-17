@@ -2,11 +2,8 @@
 //  InteractionLayer.swift
 //  Scratchpad
 //
-//  Full-canvas transparent layer that handles mouse input for:
-//  - select tool (click, marquee OR lasso, drag-move, corner-resize)
-//  - shape tool (click-drag to create)
-//  - text tool (click to place)
-//  - drawing tools WHEN drawing mode is OFF (mouse-drag to draw a stroke)
+//  Full-canvas transparent layer that handles cursor/mouse input strictly as
+//  pointer interaction, regardless of the currently selected tool.
 //
 
 import SwiftUI
@@ -15,7 +12,6 @@ import AppKit
 struct InteractionLayer: View {
     @ObservedObject var doc: DocumentModel
     let isTextEditing: Bool
-    let onBeginTextEdit: (UUID) -> Void
     /// Called whenever the layer receives a user interaction — the host uses
     /// this to resign first responder so the title TextField commits / blurs.
     var onInteractionBegin: () -> Void = {}
@@ -26,7 +22,6 @@ struct InteractionLayer: View {
     @State private var moveStartDoc: CGPoint? = nil
     @State private var moveTotal: CGSize = .zero
     @State private var moveIDs: Set<UUID> = []
-    @State private var shapePreview: CGRect? = nil
     @State private var marquee: CGRect? = nil
     @State private var lassoPoints: [CGPoint] = []
     @State private var mode: Mode = .idle
@@ -35,10 +30,9 @@ struct InteractionLayer: View {
     @State private var resizeHandle: ResizeHandle = .bottomRight
     @State private var resizeCumulativeSX: CGFloat = 1
     @State private var resizeCumulativeSY: CGFloat = 1
-    @State private var drawTouchID: Int32 = -1
 
     private enum Mode {
-        case idle, moving, marquee, lasso, shape, resizing, drawing, textPending
+        case idle, moving, marquee, lasso, resizing
     }
 
     private enum ResizeHandle: Int {
@@ -80,17 +74,10 @@ struct InteractionLayer: View {
                     selectionRect: doc.selection.isEmpty ? nil : doc.selectionBounds,
                     marqueeRect: mode == .marquee ? marquee : nil,
                     lassoPath: mode == .lasso ? lassoPoints : nil,
-                    shapePreview: shapePreview.flatMap { r in
-                        SelectionLayer.ShapePreview(
-                            kind: doc.shapeKind,
-                            color: doc.color,
-                            width: doc.shapeStrokeWidth,
-                            rect: r
-                        )
-                    },
+                    shapePreview: nil,
                     panOffset: doc.panOffset,
                     zoom: doc.zoom,
-                    showHandles: (doc.tool == .select || doc.tool == .text) && !doc.selection.isEmpty
+                    showHandles: !doc.selection.isEmpty
                 )
             }
             .gesture(
@@ -105,13 +92,7 @@ struct InteractionLayer: View {
     /// Whether this layer intercepts events. Skips when editing text so the
     /// NSTextView can receive events.
     private var shouldHandle: Bool {
-        if isTextEditing { return false }
-        switch doc.tool {
-        case .pen, .highlighter, .eraser:
-            return !doc.isDrawingModeActive
-        case .select, .shape, .text:
-            return true
-        }
+        !isTextEditing
     }
 
     // MARK: - Coordinate math
@@ -131,7 +112,7 @@ struct InteractionLayer: View {
     /// Screen-space corner handle hit test — returns the corner index (0..3)
     /// for TL, TR, BL, BR, or nil.
     private func resizeHandleHit(_ p: CGPoint, in size: CGSize) -> ResizeHandle? {
-        guard (doc.tool == .select || doc.tool == .text), !doc.selection.isEmpty else { return nil }
+        guard !doc.selection.isEmpty else { return nil }
         let b = doc.selectionBounds
         let tl = docToScreen(CGPoint(x: b.minX, y: b.minY), in: size)
         let tm = docToScreen(CGPoint(x: b.midX, y: b.minY), in: size)
@@ -238,109 +219,38 @@ struct InteractionLayer: View {
         case .lasso:
             lassoPoints.append(current)
 
-        case .shape:
-            let a = screenToDoc(start, in: size)
-            let b = screenToDoc(current, in: size)
-            shapePreview = CGRect(
-                x: min(a.x, b.x), y: min(a.y, b.y),
-                width: abs(b.x - a.x), height: abs(b.y - a.y)
-            )
-
-        case .drawing:
-            let docP = screenToDoc(current, in: size)
-            doc.extendStroke(id: drawTouchID, to: docP, pressure: 0.6, timestamp: g.time.timeIntervalSince1970)
-
-        case .textPending, .idle:
+        case .idle:
             break
         }
     }
 
     private func determineMode(at start: CGPoint, in size: CGSize) {
-        switch doc.tool {
-        case .select:
-            if let handle = resizeHandleHit(start, in: size) {
-                mode = .resizing
-                resizeInitialSel = doc.selectionBounds
-                resizeHandle = handle
-                resizeAnchor = handle.anchor(in: resizeInitialSel)
-                resizeCumulativeSX = 1
-                resizeCumulativeSY = 1
-                return
-            }
-            let docP = screenToDoc(start, in: size)
-            if let hitID = doc.hitTest(docP) {
-                if !doc.selection.contains(hitID) { doc.selection = [hitID] }
-                mode = .moving
-                moveStartDoc = docP
-                moveTotal = .zero
-                moveIDs = doc.selection
-            } else {
-                doc.selection.removeAll()
-                if doc.selectMode == .lasso {
-                    mode = .lasso
-                    lassoPoints = [start]
-                } else {
-                    mode = .marquee
-                }
-            }
-
-        case .shape:
-            mode = .shape
-
-        case .text:
-            if let handle = resizeHandleHit(start, in: size) {
-                mode = .resizing
-                resizeInitialSel = doc.selectionBounds
-                resizeHandle = handle
-                resizeAnchor = handle.anchor(in: resizeInitialSel)
-                resizeCumulativeSX = 1
-                resizeCumulativeSY = 1
-                return
-            }
-
-            let p = screenToDoc(start, in: size)
-            if let textID = textItemHitTest(p) {
-                doc.selection = [textID]
-                onBeginTextEdit(textID)
-                mode = .textPending
-            } else {
-                // Click-to-place. The DragGesture intercepts simple taps too, so
-                // we place the text item right here. A subsequent drag (unlikely)
-                // is ignored.
-                let rect = CGRect(x: p.x, y: p.y,
-                                  width: 220,
-                                  height: max(32, doc.textFontSize * 1.6))
-                let item = CanvasItem(
-                    frame: rect,
-                    kind: .text(.init(
-                        text: "",
-                        fontSize: doc.textFontSize,
-                        color: CodableColor(doc.color)
-                    ))
-                )
-                doc.addItem(item)
-                doc.selection = [item.id]
-                onBeginTextEdit(item.id)
-                mode = .textPending
-            }
-
-        case .pen, .highlighter, .eraser:
-            guard !doc.isDrawingModeActive else { mode = .idle; return }
-            // Mouse drawing path.
-            drawTouchID = Int32.random(in: 1_000...9_999)
-            let docP = screenToDoc(start, in: size)
-            doc.beginStroke(id: drawTouchID, at: docP, pressure: 0.6, timestamp: Date().timeIntervalSince1970)
-            mode = .drawing
+        if let handle = resizeHandleHit(start, in: size) {
+            mode = .resizing
+            resizeInitialSel = doc.selectionBounds
+            resizeHandle = handle
+            resizeAnchor = handle.anchor(in: resizeInitialSel)
+            resizeCumulativeSX = 1
+            resizeCumulativeSY = 1
+            return
         }
-    }
 
-    private func textItemHitTest(_ p: CGPoint) -> UUID? {
-        for item in doc.items.reversed() {
-            if case .text = item.kind, item.frame.insetBy(dx: -4, dy: -4).contains(p) {
-                return item.id
+        let docP = screenToDoc(start, in: size)
+        if let hitID = doc.hitTest(docP) {
+            if !doc.selection.contains(hitID) { doc.selection = [hitID] }
+            mode = .moving
+            moveStartDoc = docP
+            moveTotal = .zero
+            moveIDs = doc.selection
+        } else {
+            doc.selection.removeAll()
+            if doc.selectMode == .lasso {
+                mode = .lasso
+                lassoPoints = [start]
+            } else {
+                mode = .marquee
             }
         }
-        return nil
     }
 
     private func handleDragEnded(_ g: DragGesture.Value, in size: CGSize) {
@@ -352,7 +262,6 @@ struct InteractionLayer: View {
             moveStartDoc = nil
             marquee = nil
             lassoPoints = []
-            shapePreview = nil
             let finishedMode = mode
             mode = .idle
             if finishedMode == .moving, moveTotal != .zero {
@@ -371,7 +280,6 @@ struct InteractionLayer: View {
             moveIDs = []
             resizeCumulativeSX = 1
             resizeCumulativeSY = 1
-            drawTouchID = -1
         }
 
         switch mode {
@@ -407,21 +315,7 @@ struct InteractionLayer: View {
                 }
             }
 
-        case .shape:
-            if let r = shapePreview, r.width > 3 || r.height > 3 {
-                let item = CanvasItem(
-                    frame: r,
-                    kind: .shape(doc.shapeKind, CodableColor(doc.color), doc.shapeStrokeWidth)
-                )
-                doc.addItem(item)
-                doc.selection = [item.id]
-                doc.tool = .select
-            }
-
-        case .drawing:
-            doc.endStroke(id: drawTouchID)
-
-        case .textPending, .moving, .resizing, .idle:
+        case .moving, .resizing, .idle:
             break
         }
     }
