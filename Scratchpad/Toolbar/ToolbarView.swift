@@ -22,6 +22,7 @@ struct ToolbarView: View {
     var cmdHeld: Bool = false
 
     @State private var titleDraft: String = ""
+    @State private var showsExpandedPalette: Bool = false
     @FocusState private var titleFocused: Bool
 
     var body: some View {
@@ -129,18 +130,12 @@ struct ToolbarView: View {
 
             Divider().frame(height: 22).padding(.horizontal, 4)
 
-            // Color palette — applies to selection when non-empty, otherwise
-            // just sets the "next stroke" color.
-            HStack(spacing: 4) {
-                ForEach(Array(doc.palette.enumerated()), id: \.offset) { _, c in
-                    ColorSwatch(color: c, isSelected: doc.color.description == c.description) {
-                        doc.color = c
-                        if !doc.selection.isEmpty {
-                            doc.applyColorToSelection(c)
-                        }
-                    }
-                }
-            }
+            ColorSelector(
+                palette: doc.palette,
+                selectedColor: doc.color,
+                showsExpandedPalette: $showsExpandedPalette,
+                onSelect: applyColor
+            )
 
             Divider().frame(height: 22).padding(.horizontal, 4)
 
@@ -267,6 +262,13 @@ struct ToolbarView: View {
         case .highlighter: doc.highlighterWidth = v
         case .eraser:      doc.eraserWidth = v
         default:           doc.lineWidth = v
+        }
+    }
+
+    private func applyColor(_ color: Color) {
+        doc.color = color
+        if !doc.selection.isEmpty {
+            doc.applyColorToSelection(color)
         }
     }
 }
@@ -410,6 +412,8 @@ private struct SplitToolButton<Content: View>: View {
 private struct ColorSwatch: View {
     let color: Color
     let isSelected: Bool
+    var size: CGFloat = 18
+    var ringColor: Color = Color.primary.opacity(0.85)
     let action: () -> Void
 
     var body: some View {
@@ -417,17 +421,171 @@ private struct ColorSwatch: View {
             ZStack {
                 Circle()
                     .fill(color)
-                    .frame(width: 18, height: 18)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(Color.white.opacity(0.7), lineWidth: 0.7)
+                    )
+                    .frame(width: size, height: size)
                     .shadow(color: color.opacity(0.35), radius: 3, x: 0, y: 1)
                 if isSelected {
                     Circle()
-                        .strokeBorder(Color.primary.opacity(0.85), lineWidth: 2)
-                        .frame(width: 22, height: 22)
+                        .strokeBorder(ringColor, lineWidth: size > 20 ? 2.4 : 2)
+                        .frame(width: size + 4, height: size + 4)
                 }
             }
-            .frame(width: 24, height: 24)
+            .frame(width: size + 6, height: size + 6)
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct ColorSelector: View {
+    let palette: [Color]
+    let selectedColor: Color
+    @Binding var showsExpandedPalette: Bool
+    let onSelect: (Color) -> Void
+
+    private var primaryColors: [Color] {
+        Array(palette.prefix(3))
+    }
+
+    private var expandedColors: [Color] {
+        Array(palette.dropFirst(3))
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            HStack(spacing: 5) {
+                ForEach(Array(primaryColors.enumerated()), id: \.offset) { _, color in
+                    ColorSwatch(
+                        color: color,
+                        isSelected: selectedColor.matches(color)
+                    ) {
+                        onSelect(color)
+                    }
+                }
+            }
+            .padding(.leading, 2)
+            .padding(.trailing, 4)
+
+            Button {
+                showsExpandedPalette.toggle()
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(showsExpandedPalette ? selectedColor.opacity(0.16) : Color.white.opacity(0.02))
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(showsExpandedPalette ? selectedColor : .secondary.opacity(0.8))
+                        .rotationEffect(.degrees(showsExpandedPalette ? 180 : 0))
+                        .animation(.spring(response: 0.22, dampingFraction: 0.86), value: showsExpandedPalette)
+                }
+                .frame(width: 22, height: 28)
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showsExpandedPalette, arrowEdge: .top) {
+                expandedPalettePopover
+            }
+        }
+        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.6)
+        )
+    }
+
+    private var expandedPalettePopover: some View {
+            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Custom Color")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+
+                EmbeddedColorWell(
+                    color: Binding(
+                        get: { selectedColor },
+                        set: { onSelect($0) }
+                    )
+                )
+                .frame(width: 174, height: 44)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Palette")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 10) {
+                    ForEach(Array(expandedColors.enumerated()), id: \.offset) { _, color in
+                        ColorSwatch(
+                            color: color,
+                            isSelected: selectedColor.matches(color),
+                            size: 26,
+                            ringColor: .primary.opacity(0.92)
+                        ) {
+                            onSelect(color)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 208)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(nsColor: .windowBackgroundColor),
+                    Color(nsColor: .controlBackgroundColor).opacity(0.96)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+    }
+}
+
+private struct EmbeddedColorWell: NSViewRepresentable {
+    @Binding var color: Color
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(color: $color)
+    }
+
+    func makeNSView(context: Context) -> NSColorWell {
+        let well = NSColorWell()
+        well.colorWellStyle = .expanded
+        well.supportsAlpha = false
+        well.isBordered = false
+        well.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Choose custom color")
+        well.target = context.coordinator
+        well.action = #selector(Coordinator.colorChanged(_:))
+        well.color = NSColor(color)
+        return well
+    }
+
+    func updateNSView(_ nsView: NSColorWell, context: Context) {
+        let newColor = NSColor(color)
+        if !nsView.color.isApproximatelyEqual(to: newColor) {
+            nsView.color = newColor
+        }
+    }
+
+    final class Coordinator: NSObject {
+        @Binding var color: Color
+
+        init(color: Binding<Color>) {
+            _color = color
+        }
+
+        @objc func colorChanged(_ sender: NSColorWell) {
+            color = Color(sender.color)
+        }
     }
 }
 
@@ -459,5 +617,33 @@ private extension View {
         } else {
             self
         }
+    }
+}
+
+private extension Color {
+    func matches(_ other: Color) -> Bool {
+        let lhs = NSColor(self).usingColorSpace(.sRGB) ?? .clear
+        let rhs = NSColor(other).usingColorSpace(.sRGB) ?? .clear
+
+        return abs(lhs.redComponent - rhs.redComponent) < 0.002 &&
+            abs(lhs.greenComponent - rhs.greenComponent) < 0.002 &&
+            abs(lhs.blueComponent - rhs.blueComponent) < 0.002 &&
+            abs(lhs.alphaComponent - rhs.alphaComponent) < 0.002
+    }
+}
+
+private extension NSColor {
+    func isApproximatelyEqual(to other: NSColor) -> Bool {
+        guard
+            let lhs = usingColorSpace(.sRGB),
+            let rhs = other.usingColorSpace(.sRGB)
+        else {
+            return false
+        }
+
+        return abs(lhs.redComponent - rhs.redComponent) < 0.002 &&
+            abs(lhs.greenComponent - rhs.greenComponent) < 0.002 &&
+            abs(lhs.blueComponent - rhs.blueComponent) < 0.002 &&
+            abs(lhs.alphaComponent - rhs.alphaComponent) < 0.002
     }
 }
