@@ -70,6 +70,18 @@ struct TexoModelBundle {
 }
 
 enum TexoModelLocator {
+    // TODO: Replace the bundled-resources path with a first-run download +
+    //       cache flow. Plan:
+    //       1. Check `~/Library/Application Support/Scratchpad/Models/TexoMLX`
+    //          first (where we'll cache downloaded weights).
+    //       2. If absent, kick off a download from a versioned, signed URL
+    //          (e.g. GitHub Release asset), show a sheet with progress, and
+    //          verify a SHA-256 before swapping into place atomically.
+    //       3. Drop the bundled copy from the app target so the binary stays
+    //          lean. Keep `SCRATCHPAD_TEXO_MLX_MODEL` + `.local/TexoMLXModel`
+    //          as dev-only overrides.
+    //       Until that lands, the weights live inside `Scratchpad.app`'s
+    //       resources (see `Scratchpad/TexoMLXModel/`, tracked via Git LFS).
     nonisolated static func loadBundle() throws -> TexoModelBundle {
         let fm = FileManager.default
         let env = ProcessInfo.processInfo.environment
@@ -78,7 +90,12 @@ enum TexoModelLocator {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent(".local/TexoMLXModel")
-        let bundledModelPath = Bundle.main.resourceURL?.appendingPathComponent("TexoMLXModel", isDirectory: true)
+        // `.bundle` suffix: Xcode's file-system-synchronized groups otherwise
+        // flatten every non-source file into Contents/Resources directly,
+        // which would scatter config.json / tokenizer.json / weights.safetensors
+        // at the top level and lose the grouping the locator expects. A
+        // `.bundle` folder is copied atomically as a single resource package.
+        let bundledModelPath = Bundle.main.resourceURL?.appendingPathComponent("TexoMLXModel.bundle", isDirectory: true)
 
         let candidates = [
             env["SCRATCHPAD_TEXO_MLX_MODEL"],

@@ -79,13 +79,30 @@ xcodebuild -project Scratchpad.xcodeproj -scheme Scratchpad -configuration Debug
 
 The LaTeX conversion action expects a converted MLX model directory on disk. Runtime inference happens inside the app in Swift using MLX. The Python script is only for one-time weight conversion.
 
-When you run from Xcode, the app now checks these locations automatically:
-- `.local/TexoMLXModel` inside this worktree
-- `TexoMLXModel` in the built app bundle resources
-- `~/Library/Application Support/Scratchpad/Models/TexoMLX`
-- `SCRATCHPAD_TEXO_MLX_MODEL` if you want to override all of the above
+The checked-in weights live in `Scratchpad/TexoMLXModel.bundle/` and are bundled into the app (the `.bundle` suffix keeps the directory intact when Xcode copies resources). `weights.safetensors` (~77 MB) is stored via Git LFS, so:
 
-For local development in this worktree, the simplest setup is to make `.local/TexoMLXModel` point at your converted model directory. That keeps the checkpoint out of the app target so Xcode does not copy it into every debug build.
+```bash
+# one-time, per machine
+brew install git-lfs
+git lfs install
+
+# when cloning for the first time (clone will already pull LFS files)
+git clone https://github.com/KrishKrosh/Scratchpad.git
+
+# in an existing checkout that predates LFS, fetch the real file
+git lfs pull
+```
+
+> **TODO:** move to first-run download + cache so the app binary stays lean.
+> Tracked in `TexoModelLocator.loadBundle()`.
+
+When you run from Xcode, the app checks these locations automatically (first hit wins):
+- `SCRATCHPAD_TEXO_MLX_MODEL` — explicit override
+- `.local/TexoMLXModel` inside this worktree — dev override (can be a symlink)
+- `TexoMLXModel` in the built app bundle resources — default, picks up the bundled copy
+- `~/Library/Application Support/Scratchpad/Models/TexoMLX` — future downloaded cache
+
+For local development you can avoid the 77 MB bundle-copy cost on every debug build by symlinking `.local/TexoMLXModel` at the converted model directory:
 
 1. Prepare a Texo checkpoint and tokenizer locally.
 2. Convert the checkpoint:

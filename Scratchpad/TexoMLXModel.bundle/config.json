@@ -1,0 +1,64 @@
+{
+  "imageSize": 384,
+  "stemChannels": [
+    3,
+    32,
+    48
+  ],
+  "stages": [
+    {
+      "inChannels": 48,
+      "midChannels": 48,
+      "outChannels": 128,
+      "blockCount": 1,
+      "layerCount": 6,
+      "kernelSize": 3,
+      "downsample": false,
+      "lightBlock": false
+    },
+    {
+      "inChannels": 128,
+      "midChannels": 96,
+      "outChannels": 512,
+      "blockCount": 1,
+      "layerCount": 6,
+      "kernelSize": 3,
+      "downsample": true,
+      "lightBlock": false
+    },
+    {
+      "inChannels": 512,
+      "midChannels": 192,
+      "outChannels": 1024,
+      "blockCount": 3,
+      "layerCount": 6,
+      "kernelSize": 5,
+      "downsample": true,
+      "lightBlock": true
+    },
+    {
+      "inChannels": 1024,
+      "midChannels": 384,
+      "outChannels": 2048,
+      "blockCount": 1,
+      "layerCount": 6,
+      "kernelSize": 5,
+      "downsample": true,
+      "lightBlock": true
+    }
+  ],
+  "encoderHiddenSize": 2048,
+  "vocabSize": 687,
+  "maxPositionEmbeddings": 1027,
+  "positionOffset": 2,
+  "dModel": 384,
+  "decoderLayerCount": 2,
+  "decoderAttentionHeads": 16,
+  "decoderFFNDim": 1536,
+  "bosTokenID": 0,
+  "padTokenID": 1,
+  "eosTokenID": 2,
+  "maxDecodeLength": 256,
+  "layerNormEps": 1e-05,
+  "scaleEmbedding": true
+}

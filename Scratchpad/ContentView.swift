@@ -31,8 +31,12 @@ struct ContentView: View {
     @State private var cmdHeld: Bool = false
     @State private var hostWindow: NSWindow?
     @State private var isConvertingLatex: Bool = false
-    @State private var isSelectionMenuExpanded: Bool = false
     @State private var latexErrorMessage: String?
+    /// Screen-space rect we play the diffusion overlay over. Captured at the
+    /// moment a conversion begins so the overlay stays anchored even after
+    /// `replaceStrokes` swaps selection to the new LaTeX item.
+    @State private var latexAnimationRect: CGRect?
+    @State private var latexAnimationClearTask: Task<Void, Never>?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -46,12 +50,15 @@ struct ContentView: View {
             )
             .zIndex(5)
 
+            DiffusionOverlay(rect: latexAnimationRect)
+                .zIndex(6)
+
             if let actionRect = selectionActionRect {
                 SelectionContextMenu(
                     rect: actionRect,
-                    isExpanded: $isSelectionMenuExpanded,
                     isBusy: isConvertingLatex,
                     mode: selectionActionMode,
+                    selectionKey: AnyHashable(doc.selection),
                     onConvert: convertSelectionToLatex,
                     onCopyLatex: copySelectedLatex,
                     onRevertToHandwriting: revertSelectedLatex
@@ -114,12 +121,6 @@ struct ContentView: View {
                 editingTextID = nil
                 resignFirstResponder()
             }
-        }
-        .onChange(of: doc.selection) { _, _ in
-            isSelectionMenuExpanded = false
-        }
-        .onChange(of: isConvertingLatex) { _, converting in
-            if converting { isSelectionMenuExpanded = true }
         }
     }
 
@@ -346,6 +347,11 @@ struct ContentView: View {
         let originalBounds = doc.combinedBounds(strokes: selectedStrokes, items: [])
         let renderColor = selectedStrokes.last?.color ?? CodableColor(.primary)
 
+        // Capture the selection rect in screen space so the diffusion overlay
+        // stays put even after `replaceStrokes` moves the selection to the
+        // newly created LaTeX item.
+        startLatexAnimation(screenRect: documentToScreenRect(originalBounds, in: viewportSize))
+
         Task {
             do {
                 let latex = try await Task.detached(priority: .userInitiated) {
@@ -368,6 +374,9 @@ struct ContentView: View {
                 latexErrorMessage = error.localizedDescription
             }
             isConvertingLatex = false
+            // Hold the diffusion overlay briefly after the swap so the new
+            // LaTeX appears to resolve out of the flash instead of snapping in.
+            scheduleLatexAnimationEnd(after: 0.35)
         }
     }
 
@@ -382,7 +391,36 @@ struct ContentView: View {
 
     private func revertSelectedLatex() {
         guard let item = doc.selectedLatexItem else { return }
-        _ = doc.revertLatexItemToStrokes(id: item.id)
+
+        let screenRect = documentToScreenRect(item.frame, in: viewportSize)
+        startLatexAnimation(screenRect: screenRect)
+
+        // Delay the actual swap slightly so the diffusion flash is visible
+        // before the strokes pop back. Revert is synchronous, unlike convert,
+        // so without this the animation wouldn't register.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            _ = doc.revertLatexItemToStrokes(id: item.id)
+            scheduleLatexAnimationEnd(after: 0.30)
+        }
+    }
+
+    // MARK: - LaTeX diffusion animation
+
+    private func startLatexAnimation(screenRect: CGRect) {
+        latexAnimationClearTask?.cancel()
+        latexAnimationClearTask = nil
+        latexAnimationRect = screenRect
+    }
+
+    private func scheduleLatexAnimationEnd(after seconds: TimeInterval) {
+        latexAnimationClearTask?.cancel()
+        let task = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            if Task.isCancelled { return }
+            latexAnimationRect = nil
+        }
+        latexAnimationClearTask = task
     }
 
     // MARK: - Page layout overlay
@@ -746,118 +784,6 @@ struct ContentView: View {
             )
         }
         .frame(width: size.width, height: size.height)
-    }
-}
-
-private struct SelectionContextMenu: View {
-    enum Mode {
-        case inkSelection
-        case renderedLatex
-    }
-
-    let rect: CGRect
-    @Binding var isExpanded: Bool
-    let isBusy: Bool
-    let mode: Mode
-    let onConvert: () -> Void
-    let onCopyLatex: () -> Void
-    let onRevertToHandwriting: () -> Void
-
-    var body: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 6) {
-                    switch mode {
-                    case .inkSelection:
-                        actionButton(
-                            label: isBusy ? "Converting..." : "Convert to LaTeX",
-                            systemImage: isBusy ? "hourglass" : "function",
-                            disabled: isBusy,
-                            action: onConvert
-                        )
-                    case .renderedLatex:
-                        actionButton(
-                            label: "Copy LaTeX",
-                            systemImage: "doc.on.doc",
-                            disabled: false,
-                            action: onCopyLatex
-                        )
-                        actionButton(
-                            label: "Back to Handwriting",
-                            systemImage: "scribble.variable",
-                            disabled: false,
-                            action: onRevertToHandwriting
-                        )
-                    }
-                }
-                .padding(8)
-                .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
-                )
-                .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 8)
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-
-            Button {
-                withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                Group {
-                    if isBusy {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 14, weight: .bold))
-                    }
-                }
-                .foregroundStyle(.primary)
-                .frame(width: 32, height: 32)
-                .background(
-                    Circle().fill(.ultraThinMaterial)
-                )
-                .overlay(
-                    Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
-                )
-                .shadow(color: .black.opacity(0.12), radius: 14, x: 0, y: 6)
-            }
-            .buttonStyle(.plain)
-        }
-        .position(
-            x: max(rect.maxX - 12, 24),
-            y: max(rect.minY - 18, 42)
-        )
-    }
-
-    private func actionButton(label: String, systemImage: String, disabled: Bool, action: @escaping () -> Void) -> some View {
-        Button {
-            action()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 14)
-                Text(label)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(disabled ? .secondary : .primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(minWidth: 180, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
     }
 }
 

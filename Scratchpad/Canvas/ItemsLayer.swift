@@ -97,6 +97,14 @@ struct ItemsLayer: View {
                 .interpolation(.high)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(6)
+                // Pair with the DiffusionOverlay on the canvas — a freshly-
+                // materialized equation blurs into clarity instead of popping in.
+                .transition(
+                    .asymmetric(
+                        insertion: AnyTransition.opacity.combined(with: .scale(scale: 0.96, anchor: .center)),
+                        removal: .opacity
+                    )
+                )
         } else {
             Text(content.latex.isEmpty ? " " : content.latex)
                 .font(.system(size: 18 * zoom, weight: .medium, design: .rounded))
