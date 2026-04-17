@@ -1,0 +1,15 @@
+{
+  "originHash" : "231443e4712351510ab418164c13b6d5894774039d8c118ed8208a5fc9fe884e",
+  "pins" : [
+    {
+      "identity" : "openmultitouchsupport",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/KrishKrosh/OpenMultitouchSupport.git",
+      "state" : {
+        "revision" : "1a4aeff416773ae04bfce515f94b872cfa2c47ba",
+        "version" : "1.0.12"
+      }
+    }
+  ],
+  "version" : 3
+}
