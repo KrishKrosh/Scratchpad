@@ -82,7 +82,7 @@ final class TrackpadInputManager: ObservableObject {
                 id: d.id,
                 x: nx,
                 y: ny,
-                pressure: CGFloat(max(0, min(3.0, d.pressure))),
+                pressure: CGFloat(max(0, d.pressure)),
                 isContact: isContact,
                 isHovering: isHovering,
                 timestamp: CACurrentMediaTime()

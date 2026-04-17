@@ -15,6 +15,8 @@ struct ContentView: View {
     @StateObject private var input = TrackpadInputManager()
     @Environment(\.undoManager) private var envUndoManager
     @Environment(\.openWindow) private var openWindow
+    @AppStorage(AppSettings.drawingPressureThresholdKey)
+    private var drawingPressureThreshold = AppSettings.defaultDrawingPressureThreshold
 
     @State private var viewportSize: CGSize = .zero
     @State private var activeTouchIDs: Set<Int32> = []
@@ -165,6 +167,7 @@ struct ContentView: View {
                         doc: doc,
                         input: input,
                         screenRect: rect,
+                        activeTouchIDs: activeTouchIDs,
                         hideIndicator: panZoomActive,
                         onDragChanged: { translation in
                             let dx = translation.width - dragSessionAccum.width
@@ -258,19 +261,19 @@ struct ContentView: View {
 
     private func handleTouches(_ touches: [NormalizedTouch]) {
         let contactTouches = touches.filter(\.isContact)
-        let shouldDraw = doc.isDrawingModeActive
-            && doc.tool.canDraw
-            && contactTouches.count == 1
-
-        if !shouldDraw {
-            for id in activeTouchIDs {
-                doc.endStroke(id: id)
-            }
-            activeTouchIDs.removeAll()
+        guard doc.isDrawingModeActive, doc.tool.canDraw, contactTouches.count == 1 else {
+            endActiveTouches()
             return
         }
 
         let t = contactTouches[0]
+        let shouldDraw = shouldDraw(for: t)
+
+        if !shouldDraw {
+            endActiveTouches()
+            return
+        }
+
         let p = touchToDocumentPoint(t)
 
         if activeTouchIDs.contains(t.id) {
@@ -282,6 +285,20 @@ struct ContentView: View {
             activeTouchIDs = [t.id]
             doc.beginStroke(id: t.id, at: p, pressure: t.pressure, timestamp: t.timestamp)
         }
+    }
+
+    private func shouldDraw(for touch: NormalizedTouch) -> Bool {
+        if activeTouchIDs.contains(touch.id) {
+            return touch.pressure >= AppSettings.releaseThreshold(from: drawingPressureThreshold)
+        }
+        return touch.pressure >= AppSettings.beginThreshold(from: drawingPressureThreshold)
+    }
+
+    private func endActiveTouches() {
+        for id in activeTouchIDs {
+            doc.endStroke(id: id)
+        }
+        activeTouchIDs.removeAll()
     }
 
     private func updateTextItem(_ id: UUID, _ text: String) {

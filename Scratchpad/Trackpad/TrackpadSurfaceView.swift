@@ -12,9 +12,12 @@ import SwiftUI
 struct TrackpadSurfaceView: View {
     @ObservedObject var doc: DocumentModel
     @ObservedObject var input: TrackpadInputManager
+    @AppStorage(AppSettings.drawingPressureThresholdKey)
+    private var drawingPressureThreshold = AppSettings.defaultDrawingPressureThreshold
 
     /// Rect of the surface in screen space (fixed — does not follow pan/zoom).
     let screenRect: CGRect
+    let activeTouchIDs: Set<Int32>
     /// Suppress finger indicators (e.g. while pan/zoom is active).
     var hideIndicator: Bool = false
     let onDragChanged: (CGSize) -> Void
@@ -23,7 +26,6 @@ struct TrackpadSurfaceView: View {
     var body: some View {
         let drawing = doc.isDrawingModeActive
         let indicatorSize = max(3, currentIndicatorSize())
-        let indicatorColor: Color = doc.tool == .eraser ? .gray : doc.color
 
         ZStack {
             // Outline only — no fill, no glass.
@@ -52,12 +54,12 @@ struct TrackpadSurfaceView: View {
             // Finger indicators — only while drawing mode is on, and not
             // suppressed by pan/zoom activity.
             if drawing && !hideIndicator {
-                ForEach(input.touches.filter(\.isContact)) { t in
+                ForEach(input.touches) { t in
                     IndicatorDot(
                         touch: t,
                         surfaceSize: screenRect.size,
                         diameter: indicatorSize,
-                        color: indicatorColor
+                        state: indicatorState(for: t)
                     )
                 }
             }
@@ -95,6 +97,30 @@ struct TrackpadSurfaceView: View {
         case .eraser:      return doc.eraserWidth
         default:           return doc.lineWidth
         }
+    }
+
+    private func indicatorState(for touch: NormalizedTouch) -> IndicatorDot.State {
+        let contactCount = input.touches.filter(\.isContact).count
+
+        if activeTouchIDs.contains(touch.id) {
+            return .drawing(color: currentDrawingColor)
+        }
+        if touch.isHovering {
+            return .hovering
+        }
+        guard touch.isContact else {
+            return .hovering
+        }
+        if contactCount != 1 {
+            return .blocked
+        }
+        return touch.pressure >= AppSettings.beginThreshold(from: drawingPressureThreshold)
+            ? .drawing(color: currentDrawingColor)
+            : .preview
+    }
+
+    private var currentDrawingColor: Color {
+        doc.tool == .eraser ? .gray : doc.color
     }
 }
 
@@ -138,16 +164,24 @@ private struct HintPill: View {
 // MARK: - Tiny finger dot
 
 private struct IndicatorDot: View {
+    enum State {
+        case hovering
+        case preview
+        case blocked
+        case drawing(color: Color)
+    }
+
     let touch: NormalizedTouch
     let surfaceSize: CGSize
     let diameter: CGFloat
-    let color: Color
+    let state: State
 
     var body: some View {
         Circle()
-            .fill(color.opacity(0.85))
-            .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 0.8))
+            .fill(fillStyle)
+            .overlay(Circle().stroke(strokeColor, style: strokeStyle))
             .frame(width: diameter, height: diameter)
+            .shadow(color: glowColor, radius: glowRadius, x: 0, y: 0)
             .offset(
                 x: -surfaceSize.width / 2 + touch.x * surfaceSize.width,
                 y: -surfaceSize.height / 2 + touch.y * surfaceSize.height
@@ -155,5 +189,70 @@ private struct IndicatorDot: View {
             .allowsHitTesting(false)
             .animation(.interactiveSpring(response: 0.12, dampingFraction: 0.85), value: touch.x)
             .animation(.interactiveSpring(response: 0.12, dampingFraction: 0.85), value: touch.y)
+    }
+
+    private var fillStyle: Color {
+        switch state {
+        case .hovering:
+            return Color.white.opacity(0.06)
+        case .preview:
+            return Color.white.opacity(0.18)
+        case .blocked:
+            return Color.black.opacity(0.12)
+        case .drawing(let color):
+            return color.opacity(0.92)
+        }
+    }
+
+    private var strokeColor: Color {
+        switch state {
+        case .hovering:
+            return Color.white.opacity(0.82)
+        case .preview:
+            return Color.orange.opacity(0.96)
+        case .blocked:
+            return Color.secondary.opacity(0.8)
+        case .drawing:
+            return Color.white.opacity(0.94)
+        }
+    }
+
+    private var strokeStyle: StrokeStyle {
+        switch state {
+        case .hovering:
+            return StrokeStyle(lineWidth: 1.1, dash: [4, 3])
+        case .preview:
+            return StrokeStyle(lineWidth: 2)
+        case .blocked:
+            return StrokeStyle(lineWidth: 1.2, dash: [2, 3])
+        case .drawing:
+            return StrokeStyle(lineWidth: 0.9)
+        }
+    }
+
+    private var glowColor: Color {
+        switch state {
+        case .hovering:
+            return .clear
+        case .preview:
+            return Color.orange.opacity(0.18)
+        case .blocked:
+            return .clear
+        case .drawing(let color):
+            return color.opacity(0.32)
+        }
+    }
+
+    private var glowRadius: CGFloat {
+        switch state {
+        case .hovering:
+            return 0
+        case .preview:
+            return 8
+        case .blocked:
+            return 0
+        case .drawing:
+            return 12
+        }
     }
 }

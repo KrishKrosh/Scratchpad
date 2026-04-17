@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftUI
+import AppKit
 
 @main
 struct ScratchpadApp: App {
@@ -24,5 +25,18 @@ struct ScratchpadApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1200, height: 780)
+        .commands {
+            CommandGroup(after: .appSettings) {
+                Button("Settings…") {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                }
+                .keyboardShortcut(".", modifiers: .command)
+            }
+        }
+
+        Settings {
+            SettingsView()
+        }
+        .windowResizability(.contentSize)
     }
 }
