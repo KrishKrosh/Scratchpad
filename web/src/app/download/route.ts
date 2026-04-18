@@ -9,7 +9,7 @@ import { NextResponse } from "next/server";
  */
 
 export const runtime = "edge";
-export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
 const OWNER = process.env.GITHUB_RELEASE_OWNER ?? "KrishKrosh";
 const REPO = process.env.GITHUB_RELEASE_REPO ?? "Scratchpad";
@@ -23,7 +23,7 @@ export async function GET() {
     }
     const res = await fetch(
       `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`,
-      { headers, next: { revalidate: 300 } },
+      { headers, cache: "no-store" },
     );
     if (!res.ok) return NextResponse.redirect(RELEASES_PAGE, 302);
 

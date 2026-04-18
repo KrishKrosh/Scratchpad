@@ -13,9 +13,7 @@ import { NextResponse } from "next/server";
  */
 
 export const runtime = "edge";
-// Recheck at most every 5 minutes — Sparkle's default check interval is
-// daily, so this is comfortably fresh.
-export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
 const OWNER = process.env.GITHUB_RELEASE_OWNER ?? "KrishKrosh";
 const REPO = process.env.GITHUB_RELEASE_REPO ?? "Scratchpad";
@@ -37,7 +35,7 @@ export async function GET() {
     const res = await fetch(appcastAsset.browser_download_url, {
       // GitHub asset URLs 302 to a signed S3 link; let edge follow it.
       redirect: "follow",
-      next: { revalidate: 300 },
+      cache: "no-store",
     });
     if (!res.ok) return emptyFeed(`upstream ${res.status}`);
 
@@ -68,7 +66,7 @@ async function fetchLatestRelease(): Promise<Release | null> {
   }
   const r = await fetch(
     `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`,
-    { headers, next: { revalidate: 300 } },
+    { headers, cache: "no-store" },
   );
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`github ${r.status}`);
