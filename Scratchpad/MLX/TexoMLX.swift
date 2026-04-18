@@ -14,6 +14,7 @@ enum TexoMLXError: LocalizedError {
     case missingFile(String)
     case invalidConfig
     case invalidTokenizer
+    case invalidWeights(String)
     case missingWeight(String)
     case noStrokes
     case emptyPrediction
@@ -24,6 +25,7 @@ enum TexoMLXError: LocalizedError {
         case .missingFile(let file): return "Missing Texo MLX model file: \(file)"
         case .invalidConfig: return "The Texo MLX config file is invalid."
         case .invalidTokenizer: return "The Texo tokenizer file is invalid."
+        case .invalidWeights(let message): return message
         case .missingWeight(let name): return "Missing converted model weight: \(name)"
         case .noStrokes: return "No selected strokes were provided for recognition."
         case .emptyPrediction: return "The model returned an empty LaTeX prediction."
@@ -130,6 +132,16 @@ enum TexoModelLocator {
             throw TexoMLXError.missingFile(weightsURL.lastPathComponent)
         }
 
+        let weightsData = try Data(contentsOf: weightsURL, options: [.mappedIfSafe])
+        if isGitLFSPointer(weightsData) {
+            throw TexoMLXError.invalidWeights(
+                """
+                The bundled Texo MLX weights were not downloaded correctly in this build.
+                This app was packaged with a Git LFS pointer instead of the real model weights.
+                """
+            )
+        }
+
         let configData = try Data(contentsOf: configURL)
         let tokenizerData = try Data(contentsOf: tokenizerURL)
         let decoder = JSONDecoder()
@@ -140,6 +152,12 @@ enum TexoModelLocator {
         let weights = try MLX.loadArrays(url: weightsURL)
 
         return TexoModelBundle(directoryURL: directoryURL, config: config, tokenizer: tokenizer, weights: weights)
+    }
+
+    private nonisolated static func isGitLFSPointer(_ data: Data) -> Bool {
+        guard data.count < 1024 else { return false }
+        guard let prefix = String(data: data.prefix(128), encoding: .utf8) else { return false }
+        return prefix.hasPrefix("version https://git-lfs.github.com/spec/v1")
     }
 }
 
