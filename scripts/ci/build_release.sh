@@ -9,6 +9,7 @@ set -euo pipefail
 : "${VERSION:?VERSION is required}"
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+: "${APPLE_TEAM_ID:?APPLE_TEAM_ID is required}"
 : "${SPARKLE_PUBLIC_ED_KEY:?SPARKLE_PUBLIC_ED_KEY is required}"
 : "${SPARKLE_PRIVATE_ED_KEY:?SPARKLE_PRIVATE_ED_KEY is required}"
 
@@ -43,9 +44,9 @@ xcodebuild \
   -destination "generic/platform=macOS" \
   ARCHS="arm64 x86_64" \
   ONLY_ACTIVE_ARCH=NO \
-  CODE_SIGN_IDENTITY="" \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGNING_ALLOWED=NO \
+  DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="Developer ID Application" \
   SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
   archive
 
