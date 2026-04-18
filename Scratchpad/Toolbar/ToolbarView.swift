@@ -304,10 +304,13 @@ private struct UpdateToolbarChip: View {
 
                 Text(title)
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .foregroundStyle(Color.accentColor)
             .padding(.horizontal, 10)
             .frame(height: 28)
+            .fixedSize(horizontal: true, vertical: false)
             .background(
                 Capsule(style: .continuous)
                     .fill(Color.accentColor.opacity(0.12))

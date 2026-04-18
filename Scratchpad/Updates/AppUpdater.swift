@@ -18,28 +18,28 @@ final class AppUpdater: NSObject, ObservableObject {
 
     var isVisible: Bool {
         switch phase {
-        case .available, .downloading, .readyToInstall, .installing, .failed:
+        case .available, .downloading, .readyToInstall, .installing:
             return true
-        case .idle, .checking:
+        case .idle, .checking, .failed:
             return false
         }
     }
 
     var buttonTitle: String {
         switch phase {
-        case .available(let version):
-            return "Update \(version)"
+        case .available:
+            return "Update"
         case .downloading(_, let progress):
             if let progress {
                 return "Updating \(Int(progress * 100))%"
             }
             return "Updating"
         case .readyToInstall:
-            return "Restart to Update"
+            return "Update"
         case .installing:
             return "Installing"
         case .failed:
-            return "Update Failed"
+            return "Update"
         case .idle, .checking:
             return "Update"
         }
