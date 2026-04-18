@@ -20,6 +20,7 @@ Scratchpad is not a template app anymore. It currently includes:
 - AppKit interop where needed (window/event handling, save/export panels)
 - Swift Package dependency:
   - `OpenMultitouchSupport` (`1.0.12`)
+  - `Sparkle` (`2.9.x`) for signed in-app updates with a custom SwiftUI toolbar chip
 
 ## Project Structure
 
@@ -71,9 +72,32 @@ xcodebuild -project Scratchpad.xcodeproj -scheme Scratchpad -configuration Debug
 
 - `OpenMultitouchSupport` is resolved through Swift Package Manager.
 - `MLX` and `MLXNN` are resolved through Swift Package Manager from [`ml-explore/mlx-swift`](https://github.com/ml-explore/mlx-swift).
+- `Sparkle` is resolved through Swift Package Manager from [`sparkle-project/Sparkle`](https://github.com/sparkle-project/Sparkle).
 - If package resolution is stale/broken, in Xcode run:
   - `File -> Packages -> Reset Package Caches`
   - `File -> Packages -> Resolve Package Versions`
+
+## Releases And Auto-Updates
+
+- The app ships Sparkle, but does not use Sparkle's stock windows. The only surfaced updater UI is the toolbar chip on the right side of the editor toolbar.
+- On launch, the updater starts and performs a background check immediately. After that, Sparkle continues checking on the configured interval (`SUScheduledCheckInterval = 3600` seconds).
+- The website download CTA should keep pointing at `/download`. That route already redirects to the latest GitHub release DMG, and `/appcast.xml` proxies the latest release's `appcast.xml`.
+- `.github/workflows/release.yml` publishes a new GitHub release on every push to `main`, and `scripts/ci/build_release.sh` handles version bumping, archive/export, notarization, DMG creation, and Sparkle appcast generation.
+
+### Required GitHub Secrets
+
+- `BUILD_CERTIFICATE_BASE64`: base64-encoded Developer ID Application `.p12`
+- `P12_PASSWORD`: password for that `.p12`
+- `APPLE_ID`: Apple ID used for notarization
+- `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password for `notarytool`
+- `APPLE_TEAM_ID`: Apple Developer team ID
+- `SPARKLE_PRIVATE_ED_KEY`: private Ed25519 key used by `generate_appcast --ed-key-file`
+- `SPARKLE_PUBLIC_ED_KEY`: public Ed25519 key embedded into the app at build time
+
+### Open Source Note
+
+- The Sparkle public key is not sensitive and can be committed once finalized.
+- The Sparkle private key must stay out of the repo. Keep it only in GitHub Actions secrets and any trusted local release machines.
 
 ### MLX Texo Model Setup
 

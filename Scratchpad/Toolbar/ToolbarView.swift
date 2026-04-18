@@ -14,6 +14,7 @@ enum ExportFormat {
 
 struct ToolbarView: View {
     @ObservedObject var doc: DocumentModel
+    @EnvironmentObject private var appUpdater: AppUpdater
     let onHome: () -> Void
     let onExport: (ExportFormat) -> Void
     let onNewDocument: () -> Void
@@ -216,6 +217,17 @@ struct ToolbarView: View {
 
     private var rightCluster: some View {
         HStack(spacing: 6) {
+            if appUpdater.isVisible {
+                UpdateToolbarChip(
+                    title: appUpdater.buttonTitle,
+                    isBusy: appUpdater.isBusy,
+                    action: appUpdater.triggerPrimaryAction
+                )
+                .help("Download or install the latest Scratchpad update")
+
+                Divider().frame(height: 20)
+            }
+
             IconButton(systemName: "trash", tint: .secondary, action: onClear)
                 .help("Clear canvas")
 
@@ -270,6 +282,43 @@ struct ToolbarView: View {
         if !doc.selection.isEmpty {
             doc.applyColorToSelection(color)
         }
+    }
+}
+
+private struct UpdateToolbarChip: View {
+    let title: String
+    let isBusy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if isBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                } else {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+            }
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.28), lineWidth: 0.9)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isBusy)
     }
 }
 
