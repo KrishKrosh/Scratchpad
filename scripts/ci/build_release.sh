@@ -6,6 +6,7 @@ set -euo pipefail
 : "${SCHEME:=Scratchpad}"
 : "${PROJECT_PATH:=Scratchpad.xcodeproj}"
 : "${CONFIGURATION:=Release}"
+: "${MACOSX_DEPLOYMENT_TARGET:=14.0}"
 : "${VERSION:?VERSION is required}"
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
@@ -45,6 +46,7 @@ xcodebuild \
   -destination "generic/platform=macOS" \
   ARCHS="arm64 x86_64" \
   ONLY_ACTIVE_ARCH=NO \
+  MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
   DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="Developer ID Application" \

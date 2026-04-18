@@ -13,6 +13,7 @@ env:
   APP_NAME: Scratchpad
   SCHEME: Scratchpad
   CONFIGURATION: Release
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 jobs:
   release:
