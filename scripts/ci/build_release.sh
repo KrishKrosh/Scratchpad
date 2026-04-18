@@ -16,6 +16,7 @@ set -euo pipefail
 ROOT_DIR="${ROOT_DIR:-$(pwd)}"
 ARCHIVE_PATH="$RUNNER_TEMP/$APP_NAME.xcarchive"
 EXPORT_PATH="$RUNNER_TEMP/export"
+DMG_STAGING_PATH="$RUNNER_TEMP/dmg-staging"
 ARTIFACTS_DIR="$RUNNER_TEMP/release-assets"
 SPARKLE_DIR="$RUNNER_TEMP/Sparkle"
 SPARKLE_KEY_FILE="$RUNNER_TEMP/sparkle_private_ed25519"
@@ -29,7 +30,7 @@ echo "$SPARKLE_PRIVATE_ED_KEY" > "$SPARKLE_KEY_FILE"
 chmod 600 "$SPARKLE_KEY_FILE"
 
 mkdir -p "$ARTIFACTS_DIR"
-rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH"
+rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$DMG_STAGING_PATH"
 
 echo "Updating build versions to $VERSION"
 sed -i '' "s/MARKETING_VERSION = [^;]*/MARKETING_VERSION = $VERSION/g" "$ROOT_DIR/$PROJECT_PATH/project.pbxproj"
@@ -72,6 +73,8 @@ fi
 
 echo "Creating DMG"
 brew install create-dmg
+mkdir -p "$DMG_STAGING_PATH"
+ditto "$EXPORT_PATH/$APP_NAME.app" "$DMG_STAGING_PATH/$APP_NAME.app"
 create-dmg \
   --volname "$APP_NAME" \
   --volicon "$EXPORT_PATH/$APP_NAME.app/Contents/Resources/AppIcon.icns" \
@@ -83,7 +86,7 @@ create-dmg \
   --app-drop-link 445 150 \
   --hdiutil-quiet \
   "$DMG_PATH" \
-  "$EXPORT_PATH/"
+  "$DMG_STAGING_PATH/"
 
 echo "Preparing Sparkle release notes"
 cat > "$RELEASE_NOTES_PATH" <<EOF
