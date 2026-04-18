@@ -97,14 +97,14 @@ echo "Building Sparkle tools"
 git clone --depth=1 --branch 2.9.1 https://github.com/sparkle-project/Sparkle.git "$SPARKLE_DIR"
 make -C "$SPARKLE_DIR" release
 
-SPARKLE_BIN_DIR="$(find "$SPARKLE_DIR" -type d -path '*bin' | head -n 1)"
-if [[ -z "$SPARKLE_BIN_DIR" ]]; then
-  echo "Unable to locate Sparkle bin directory" >&2
+GENERATE_APPCAST_BIN="$(find "$SPARKLE_DIR" -type f -name generate_appcast -perm -111 | head -n 1)"
+if [[ -z "$GENERATE_APPCAST_BIN" ]]; then
+  echo "Unable to locate Sparkle generate_appcast binary" >&2
   exit 1
 fi
 
 echo "Generating appcast"
-"$SPARKLE_BIN_DIR/generate_appcast" "$ARTIFACTS_DIR" --ed-key-file "$SPARKLE_KEY_FILE"
+"$GENERATE_APPCAST_BIN" "$ARTIFACTS_DIR" --ed-key-file "$SPARKLE_KEY_FILE"
 
 python3 <<PY
 from pathlib import Path
